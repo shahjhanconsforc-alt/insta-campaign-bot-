@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>insta-bot — AI Agent Console</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" type="image/png" href="data/insta.png" />
+  <link rel="apple-touch-icon" href="data/insta.png" />
+</head>
+<body>
+
+  <!-- ─── Top bar ─────────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◆</span>
+      <div>
+        <h1>insta-bot</h1>
+        <p>AI Agent Console</p>
+      </div>
+    </div>
+
+    <!-- Live run status: blinks "Stopped Working" (or Paused) with the time. -->
+    <div class="run-status" id="run-status" role="status" aria-live="polite" hidden>
+      <span class="run-dot" aria-hidden="true"></span>
+      <span class="run-text" id="run-status-text"></span>
+    </div>
+
+    <div class="health" id="health">
+      <span class="pill" id="pill-server"><i></i>Server</span>
+      <span class="pill" id="pill-browser"><i></i>Chrome</span>
+      <button class="pill pill-btn" id="pill-minio" type="button"
+              title="MinIO storage — click for its live logs"><i></i>MinIO</button>
+
+      <span class="ctl-sep" aria-hidden="true"></span>
+      <button class="ctl" id="btn-stop" type="button"
+              title="Stop every running job. Asks first; Chrome stays open and nothing is cleared from the panels.">⏹</button>
+      <button class="ctl" id="btn-pause" type="button" aria-pressed="false"
+              title="Pause every running job at its next step.">⏸</button>
+      <button class="ctl" id="btn-restart" type="button"
+              title="Start fresh: clear finished runs and reload the console. Chrome stays open.">⟳</button>
+    </div>
+  </header>
+
+  <!-- MinIO logs terminal: opens from the MinIO health pill. Shows its live
+       running/stopped state and streams just the MinIO log lines. -->
+  <dialog class="modal modal-term" id="minio-term">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>&gt;_ MinIO logs
+          <span class="mio-state" id="minio-term-state">checking…</span>
+        </h3>
+        <span class="mio-endpoint" id="minio-term-endpoint"></span>
+        <button class="icon-btn" id="btn-minio-term-close" aria-label="Close">✕</button>
+      </div>
+      <pre class="out mio-out" id="minio-term-out">Waiting for MinIO logs…</pre>
+    </div>
+  </dialog>
+
+  <!-- Setup Campaign wizard: a stepwise pop-up that auto-opens on page load and
+       walks Login → Users → Messages → Start, then hands off to the Campaign
+       panel in a running state. -->
+  <dialog class="modal modal-wizard" id="campaign-setup">
+    <div class="modal-box wiz-box">
+      <div class="modal-head">
+        <h3>Setup Campaign</h3>
+        <button class="icon-btn" id="btn-setup-skip" aria-label="Skip setup">✕</button>
+      </div>
+
+      <ol class="wiz-steps" id="wiz-steps">
+        <li class="wiz-step current" data-step="1"><b>1</b><span>Login</span><button type="button" class="wiz-info" data-info="1" aria-label="What to do in Login">i</button></li>
+        <li class="wiz-step" data-step="2"><b>2</b><span>Users</span><button type="button" class="wiz-info" data-info="2" aria-label="What to do in Users">i</button></li>
+        <li class="wiz-step" data-step="3"><b>3</b><span>Messages</span><button type="button" class="wiz-info" data-info="3" aria-label="What to do in Messages">i</button></li>
+        <li class="wiz-step" data-step="4"><b>4</b><span>Media</span><button type="button" class="wiz-info" data-info="4" aria-label="What to do in Media">i</button></li>
+        <li class="wiz-step" data-step="5"><b>5</b><span>Start</span><button type="button" class="wiz-info" data-info="5" aria-label="What to do in Start">i</button></li>
+      </ol>
+      <!-- click-to-show help panel for a step's ⓘ icon -->
+      <div id="wiz-info-pop" class="wiz-info-pop" hidden role="tooltip"></div>
+
+      <div class="modal-body wiz-body">
+        <!-- STEP 1: Login (one or more accounts) -->
+        <section class="wiz-pane on" data-pane="1">
+          <!-- big add-user icon as a centred watermark, with the intro line as a
+               caption under it; the account rows (the data) show above -->
+          <img src="data/add-user.png" class="add-user-bg" alt="" aria-hidden="true">
+          <p class="add-user-note">Add one or more accounts and log each into Instagram.</p>
+          <div class="setup-acct-head">
+            <span>Label</span><span>Username / email / phone</span><span>Password</span><span></span>
+          </div>
+          <div id="setup-accounts"><!-- account rows injected by app.js --></div>
+          <!-- pinned to the bottom: Log in all + Add account (left), note (right) -->
+          <div class="setup-login-foot">
+            <button class="btn btn-primary btn-sm" id="btn-setup-login-all" type="button">🚀 Log in all</button>
+            <button class="btn btn-sm" id="btn-setup-add-acct" type="button">+ Add account</button>
+            <span class="hint" id="setup-login-note"></span>
+          </div>
+        </section>
+
+        <!-- STEP 2: Users — upload a file or load from Database; the range
+             appears once a source is loaded. -->
+        <section class="wiz-pane" data-pane="2">
+          <div class="wiz-sec-row wiz-users-head">
+            <span class="cfg-sec-k">Users</span>
+            <button class="btn btn-xs" id="btn-setup-load-data" type="button"><img src="data/db.png" class="db-ico" alt=""> Database</button>
+            <!-- Database view: filter / used / range all live in the accordion
+                 panel (built by app.js). File uploads keep the range below. -->
+            <span class="setup-range-row" id="setup-users-range" hidden>
+              <span class="hint" id="setup-data-count"></span>
+              <label class="range-field">from <input type="number" id="setup-range-from" min="1" class="range-in"></label>
+              <label class="range-field">to <input type="number" id="setup-range-to" min="1" class="range-in"></label>
+              <button class="btn btn-xs btn-primary" id="btn-setup-apply-range" type="button">Use range</button>
+            </span>
+          </div>
+          <div class="wiz-users-box" id="setup-users-preview"></div>
+          <div class="banner banner-slim" id="setup-users-note">No users selected yet.</div>
+          <input type="file" id="setup-user-fileinput" accept=".txt,.csv,.xlsx" hidden>
+
+        </section>
+
+        <!-- STEP 3: Messages — write one and/or load from Database; tick the ones
+             to use (all ticked by default), untick any to leave out. -->
+        <section class="wiz-pane" data-pane="3">
+          <div class="wiz-sec-row">
+            <span class="cfg-sec-k">Messages — draft tabs (Database loads your saved ones)</span>
+            <button class="btn btn-xs" id="btn-setup-load-sms" type="button"><img src="data/db.png" class="db-ico" alt=""> Database</button>
+            <label class="wiz-skip"><input type="checkbox" id="setup-skip-msg"> Skip messages</label>
+          </div>
+          <div class="sms-tabs" id="setup-sms-tabs" role="tablist" aria-label="Message drafts"></div>
+          <textarea id="setup-message" class="sms-body" readonly
+                    placeholder="Pick a tab's ✎ → Edit to write. Blank = &quot;Hello&quot;."></textarea>
+          <div id="setup-sms-menu" class="sms-menu" hidden role="menu">
+            <button type="button" data-sms-act="edit" role="menuitem">✎ Edit</button>
+            <button type="button" data-sms-act="rename" role="menuitem">🏷 Rename</button>
+            <button type="button" data-sms-act="update" role="menuitem">💾 Update</button>
+            <button type="button" data-sms-act="delete" class="danger" role="menuitem">🗑 Delete</button>
+          </div>
+        </section>
+
+        <!-- STEP 4: Media (skippable) — its own step after Messages -->
+        <section class="wiz-pane wiz-media-box" data-pane="4">
+          <div class="wiz-sec-row">
+            <span class="cfg-sec-k">Media — upload or load saved images</span>
+            <button class="btn btn-xs" id="btn-setup-load-media" type="button"><img src="data/db.png" class="db-ico" alt=""> Database</button>
+            <label class="wiz-skip"><input type="checkbox" id="setup-skip-media"> Skip media</label>
+          </div>
+          <!-- hidden file input, triggered by the big Upload icon in the preview -->
+          <input type="file" id="setup-media-file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" multiple hidden>
+          <div class="wiz-media-preview" id="setup-media-preview"></div>
+        </section>
+
+        <!-- STEP 5: Start — a checklist of the first four steps; Start Campaign
+             enables only when every item passes. -->
+        <section class="wiz-pane" data-pane="5">
+          <div class="cfg-sec-k">Final check — every item must pass to start</div>
+          <div class="wiz-checklist" id="setup-summary"></div>
+          <button class="btn btn-primary btn-lg" id="btn-setup-start" type="button" disabled>🚀 Start Campaign</button>
+          <p class="hint">Starts the run and opens the live Campaign view.</p>
+        </section>
+      </div>
+
+      <div class="modal-foot wiz-foot">
+        <button class="btn" id="btn-setup-back" type="button" disabled>← Back</button>
+        <button class="btn btn-sm" id="btn-campaign-open-view" type="button">📊 Campaign view</button>
+        <button class="btn btn-primary" id="btn-setup-next" type="button">Next →</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- ─── Button row (opens panels below) ─────────────────────── -->
+  <nav class="tabbar" role="tablist" aria-label="Panels">
+    <button class="tab" data-panel="campaign"   role="tab">📣 Campaign</button>
+    
+    <button class="tab" data-panel="automation" role="tab">🌐 Account Connections</button>
+    <button class="tab" data-panel="accounts"   role="tab">👥 Account Registry</button>
+    <button class="tab" data-panel="scrapping"  role="tab">🧲 Scrapping</button>
+    <button class="tab" data-panel="data"       role="tab">🗄️ Data</button>
+    <button class="tab" data-panel="agent"      role="tab">⚡ Agent</button>
+    <button class="tab" data-panel="actions"    role="tab">🎬 Actions</button>
+    <button class="tab" data-panel="tools"      role="tab">🧰 Tools</button>
+    <button class="tab" data-panel="activity"   role="tab">📡 Activity</button>
+    <button class="tab" data-panel="config"     role="tab">⚙️ Config</button>
+  </nav>
+
+  <!-- ─── Panels ──────────────────────────────────────────────── -->
+  <main class="stage" id="stage">
+
+    <section class="panel" id="panel-agent" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2>Agent</h2>
+        <p>Describe a goal. The planner picks tools, the executor runs them.</p>
+      </div>
+      <div class="panel-body">
+        <div class="field">
+          <textarea id="goal" rows="3" placeholder="e.g. Open instagram.com and take a screenshot"></textarea>
+          <div class="row">
+            <button class="btn btn-primary" id="btn-run">Run agent</button>
+            <button class="btn btn-ghost" id="btn-plan">Plan only</button>
+            <span class="hint">Plans are built by keyword routing over the tool list.</span>
+          </div>
+        </div>
+        <div class="chips" id="goal-samples">
+          <button class="chip">Open instagram.com and take a screenshot</button>
+          <button class="chip">Save a note about today's run</button>
+          <button class="chip">List my saved records</button>
+        </div>
+        <pre class="out" id="out-agent">Ready.</pre>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-automation" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2>Account Connections</h2>
+        <p>Playwright drives a real, visible Chrome window.</p>
+        <!-- data-head-action keeps it out of the title box and parks it beside
+             the >_ terminal button — see buildTerminal() in app.js -->
+        <button class="btn btn-danger btn-sm" id="btn-close" data-head-action>Close browser</button>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <label class="picker">
+            <span class="cfg-k">Account</span>
+            <select id="auto-account" aria-label="Account to automate"></select>
+          </label>
+          <input type="text" id="auto-url" placeholder="URL to type into the address bar" />
+          <button class="btn btn-primary btn-lg" id="btn-cursor">🖱️ Start Processing</button>
+        </div>
+
+        <!-- the steps that run, in order, when the button above is pressed -->
+        <div class="steps" role="group" aria-label="Sequence steps">
+          <label class="step idle" id="box-open"><input type="checkbox" id="step-open" checked />
+            <b class="badge">1</b><span>Open Chrome</span><em>empty window</em></label>
+          <span class="step-arrow">→</span>
+          <!-- the .tries circle is the attempt budget, counting down as a step
+               is retried — filled in from ATTEMPTS in app.js -->
+          <label class="step idle" id="box-newtab"><input type="checkbox" id="step-newtab" checked />
+            <b class="badge">2</b><span>New Tab</span><em>clicks Chrome’s +</em>
+            <i class="tries" title="Attempts left">5</i></label>
+          <span class="step-arrow">→</span>
+          <label class="step idle" id="box-type"><input type="checkbox" id="step-type" checked />
+            <b class="badge">3</b><span>Type in address bar</span><em>real cursor</em>
+            <i class="tries" title="Attempts left">5</i></label>
+          <span class="step-arrow">→</span>
+          <label class="step idle" id="box-creds"><input type="checkbox" id="step-creds" checked />
+            <b class="badge">4</b><span>Type credentials</span><em>with corrections</em>
+            <i class="tries" title="Attempts left">5</i></label>
+          <span class="step-arrow">→</span>
+          <!-- two ways to press Log in, tried in order — see STEPS in app.js.
+               The chips + circles are filled/updated from there. -->
+          <label class="step idle" id="box-login"><input type="checkbox" id="step-login" checked />
+            <b class="badge">5</b><span>Click Login</span>
+            <span class="methods">
+              <span class="method on" data-method="cursor"><em>via Cursor</em>
+                <i class="tries" data-method="cursor" title="Cursor attempts left">5</i></span>
+              <span class="method" data-method="inspect"><em>via Inspect</em>
+                <i class="tries" data-method="inspect" title="Inspect attempts left">3</i></span>
+            </span></label>
+        </div>
+
+        <!-- Live mirror of Chrome's real address bar as step 3 types it, one
+             character at a time. Sits OUTSIDE .steps on purpose: the steps row
+             hides during processing, and this is exactly when you want to watch
+             the URL land. Goes green when it matches the UI URL. -->
+        <div class="url-check" id="url-check" hidden>
+          <div class="uc-head">
+            <b>3 · Type in address bar</b><em>real cursor · character-by-character</em>
+          </div>
+          <dl>
+            <dt>UI URL</dt><dd id="uc-ui" class="mono">—</dd>
+            <dt>Chrome</dt><dd id="uc-chrome" class="mono">—</dd>
+          </dl>
+          <div class="uc-bar"><span id="uc-fill"></span></div>
+          <span class="uc-note" id="uc-note">waiting…</span>
+        </div>
+
+        <!-- login section: the account the sequence will use, handed over from
+             the Accounts panel -->
+        <div class="banner" id="auto-session">Pick an account to see its session.</div>
+        <!-- the accounts handed over from Accounts. Nothing runs until
+             Start Processing is pressed. -->
+        <div class="acc-queue" id="auto-detail" hidden></div>
+        <pre class="out" id="out-automation">Chrome is not open yet.</pre>
+        <p class="hint">
+          Runs the ticked steps in order. It takes over your real mouse and keyboard for a few
+          seconds — hands off while it runs; slam the pointer into a screen corner to abort.
+          Untick <strong>Open Chrome</strong> to reuse the window that's already open.
+        </p>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-campaign" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2>Campaign Planner</h2>
+        <!-- 5-step progress: circles 1–5 fill as you move through the wizard -->
+        <div class="wiz-progress" id="wiz-progress" aria-hidden="true">
+          <span class="wp-node" data-n="1">1</span>
+          <span class="wp-line" data-after="1"></span>
+          <span class="wp-node" data-n="2">2</span>
+          <span class="wp-line" data-after="2"></span>
+          <span class="wp-node" data-n="3">3</span>
+          <span class="wp-line" data-after="3"></span>
+          <span class="wp-node" data-n="4">4</span>
+          <span class="wp-line" data-after="4"></span>
+          <span class="wp-node" data-n="5">5</span>
+        </div>
+        <button class="btn btn-sm" id="btn-campaign-setup" type="button" data-head-action
+                title="Open the stepwise Setup Campaign wizard">🧩 Setup new Campaign</button>
+        <button class="icon-btn" id="btn-campaign-settings" type="button" data-head-action
+                title="Campaign settings — batching, delay and actions">⚙️</button>
+      </div>
+      <div class="panel-body">
+
+        <!-- The Setup Campaign wizard (Login → Users → Messages → Media → Start)
+             is moved into here by app.js and rendered inline as this panel's body
+             — no longer a pop-up. The old inline sections below are kept hidden so
+             the shared drafts / accounts / Campaign-view wiring still works. -->
+
+        <div class="campaign-layout" hidden>
+
+          <!-- LEFT (was the saved-name queue) removed — the run now shows in the
+               Setup wizard → Campaign view. -->
+
+          <!-- SMS tabs, message body, and the Start button floating
+               inside the panel at the bottom-right. -->
+          <div class="cl-sms">
+            <div class="sms-tabs" id="sms-tabs" role="tablist" aria-label="Message drafts"></div>
+            <textarea id="campaign-message" class="sms-body" readonly
+                      placeholder="Pick a tab's ✎ → Edit to write. Blank = &quot;Hello&quot;."></textarea>
+            <button class="btn btn-primary sms-start" id="btn-campaign">Start Campaign</button>
+
+            <!-- Per-tab actions, opened by a tab's ✎ icon. -->
+            <div id="sms-menu" class="sms-menu" hidden role="menu">
+              <button type="button" data-sms-act="edit" role="menuitem">✎ Edit</button>
+              <button type="button" data-sms-act="rename" role="menuitem">🏷 Rename</button>
+              <button type="button" data-sms-act="update" role="menuitem">💾 Update</button>
+              <button type="button" data-sms-act="delete" class="danger" role="menuitem">🗑 Delete</button>
+            </div>
+          </div>
+
+          <!-- RIGHT: upload + media preview -->
+          <div class="cl-side">
+            <label class="btn btn-sm cl-upload" title="Attach JPG, JPEG or PNG images from your device">
+              ⬆️ Upload
+              <input type="file" id="campaign-media" multiple accept="image/jpeg,image/jpg,image/png,.jpg,.jpeg,.png" hidden>
+            </label>
+            <div id="campaign-media-list" class="preview-section">
+              <p class="hint">Preview — pick images to attach</p>
+            </div>
+          </div>
+
+          <!-- BOTTOM (under the middle): what-to-send mode above the accounts,
+               then accounts top-left with Close browser bottom-right. -->
+          <div class="cl-accounts">
+            <div class="cl-mode-row">
+              <span class="cfg-k">Send</span>
+              <div class="seg" id="campaign-mode" role="group" aria-label="What to send">
+                <button type="button" class="seg-b on" data-mode="text">Text</button>
+                <button type="button" class="seg-b" data-mode="media">Media</button>
+                <button type="button" class="seg-b" data-mode="both">Both</button>
+              </div>
+              <span class="hint" id="campaign-mode-hint">Text — write the assigned message only.</span>
+            </div>
+            <div class="acct-top">
+              <span class="cfg-k acct-label">Accounts</span>
+              <button class="icon-btn" id="btn-campaign-all" type="button"
+                      title="Select all / clear" aria-label="Toggle all accounts">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 6l3 3 4-5"/><path d="M3 16l3 3 4-5"/>
+                  <line x1="14" y1="6" x2="21" y2="6"/><line x1="14" y1="17" x2="21" y2="17"/>
+                </svg>
+              </button>
+              <div id="campaign-accounts" class="chip-picker" role="group"
+                   aria-label="Open-window accounts to run the campaign on">
+                <span class="hint">Loading open windows…</span>
+              </div>
+            </div>
+            <div class="cl-close-row">
+              <button class="btn btn-sm" id="btn-campaign-view" type="button" disabled
+                      title="Available once you press Start Campaign">📊 Campaign view</button>
+              <button class="btn btn-danger btn-sm cl-close" id="btn-campaign-close" type="button"
+                      title="Close every open Chrome window">Close browser</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="banner banner-slim" id="campaign-note">Ready to run the list.</div>
+        <pre class="out out-compact" id="out-campaign">Nothing run yet.</pre>
+
+        <!-- Campaign settings — the same values as Config → Campaign batching /
+             actions. Editing here or there updates both (one shared store). -->
+        <dialog class="modal" id="campaign-settings">
+          <form method="dialog" class="modal-box">
+            <div class="modal-head">
+              <h3>Campaign settings</h3>
+              <button class="icon-btn" value="cancel" aria-label="Close">✕</button>
+            </div>
+            <div class="modal-body">
+              <p class="hint">Same as <strong>Config → Campaign batching</strong> — set them here or
+                there, both stay in sync.</p>
+
+              <label class="cfg cfg-toggle">
+                <span class="cfg-k">Send</span>
+                <span class="cfg-in">
+                  <input type="checkbox" id="camp-press-enter" />
+                  <em>press ENTER to actually send</em>
+                </span>
+                <span class="cfg-h">Off = compose but leave staged, unsent.</span>
+              </label>
+
+              <div class="cfg-sec-k">Batching</div>
+              <label class="cfg cfg-toggle">
+                <span class="cfg-k">Batching</span>
+                <span class="cfg-in">
+                  <input type="checkbox" id="camp-batch-enabled" />
+                  <em>send in batches</em>
+                </span>
+                <span class="cfg-h">Off = the whole list runs straight through.</span>
+              </label>
+              <label class="cfg">
+                <span class="cfg-k">Batch size</span>
+                <span class="cfg-in range">
+                  <input type="number" id="camp-batch-size-min" min="1" max="500" step="1"
+                         aria-label="Minimum rows per batch" />
+                  <em>to</em>
+                  <input type="number" id="camp-batch-size-max" min="1" max="500" step="1"
+                         aria-label="Maximum rows per batch" />
+                  <em>rows</em>
+                </span>
+                <span class="cfg-h">Rows per batch, picked at random in this range.</span>
+              </label>
+              <label class="cfg">
+                <span class="cfg-k">Batch delay</span>
+                <span class="cfg-in range">
+                  <input type="number" id="camp-batch-delay-min" min="0" max="240" step="1"
+                         aria-label="Minimum minutes between batches" />
+                  <em>to</em>
+                  <input type="number" id="camp-batch-delay-max" min="0" max="240" step="1"
+                         aria-label="Maximum minutes between batches" />
+                  <em>minutes</em>
+                </span>
+                <span class="cfg-h">Random wait between batches, in minutes.</span>
+              </label>
+
+              <div class="cfg-sec-k">Actions</div>
+              <label class="cfg">
+                <span class="cfg-k">Action every</span>
+                <span class="cfg-in range">
+                  <input type="number" id="camp-action-min" min="1" max="500" step="1"
+                         aria-label="Minimum rows between campaign actions" />
+                  <em>to</em>
+                  <input type="number" id="camp-action-max" min="1" max="500" step="1"
+                         aria-label="Maximum rows between campaign actions" />
+                  <em>rows</em>
+                </span>
+                <span class="cfg-h">After a random number of rows in this range, one random
+                  Actions-panel action runs, then a fresh number is drawn.</span>
+              </label>
+            </div>
+            <div class="modal-foot">
+              <button class="btn btn-primary" id="btn-camp-set-save" value="save">Save</button>
+              <button class="btn" value="cancel">Cancel</button>
+              <span class="hint" id="camp-set-note"></span>
+            </div>
+          </form>
+        </dialog>
+
+        <dialog class="modal" id="campaign-preview">
+          <div class="modal-box">
+            <div class="modal-head">
+              <h3 id="campaign-preview-title">All targets</h3>
+              <button class="icon-btn" id="btn-campaign-preview-close" aria-label="Close">✕</button>
+            </div>
+            <div class="range-bar">
+              <span class="cfg-k">Run only profiles</span>
+              <label class="range-field">from <input type="number" id="range-from" min="1" class="range-in"></label>
+              <label class="range-field">to <input type="number" id="range-to" min="1" class="range-in"></label>
+              <button class="btn btn-sm btn-primary" id="btn-range-apply" type="button">Apply</button>
+              <button class="btn btn-sm" id="btn-range-clear" type="button">All</button>
+              <span class="hint" id="range-count"></span>
+            </div>
+            <div class="modal-body" id="campaign-preview-body"></div>
+          </div>
+        </dialog>
+
+        <!-- Live campaign monitor: opens from the username list once a campaign
+             has started. One row per name with its assignment and live status. -->
+        <dialog class="modal modal-view" id="campaign-view">
+          <div class="modal-box">
+            <div class="modal-head">
+              <h3 id="campaign-view-title">Campaign run</h3>
+              <button class="icon-btn" id="btn-campaign-view-close" aria-label="Close">✕</button>
+            </div>
+            <div class="banner banner-slim cv-summary" id="campaign-view-summary">No campaign yet.</div>
+            <div class="cv-batch" id="campaign-view-batch" hidden>
+              <span class="cv-batch-dot" aria-hidden="true"></span>
+              <span id="campaign-view-batch-text">Remaining time for next batch start 00:00:00</span>
+            </div>
+            <div class="cv-tabs" id="campaign-view-tabs" role="tablist" aria-label="Accounts"></div>
+            <div class="modal-body">
+              <table class="cv-table">
+                <thead>
+                  <tr>
+                    <th>#</th><th>Username</th><th>Account</th><th>SMS</th>
+                    <th>Media</th><th>Batch</th><th>Status</th><th>Time</th>
+                  </tr>
+                </thead>
+                <tbody id="campaign-view-rows"></tbody>
+              </table>
+            </div>
+          </div>
+        </dialog>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-actions" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2>Actions</h2>
+        <p>Click a button here to click the matching item in the Instagram menu on
+           the chosen window.</p>
+      </div>
+      <div class="panel-body">
+        <div class="field">
+          <div class="row">
+            <select id="actions-menu-acct" class="mini" aria-label="Window to run on"></select>
+            <span class="hint">Pick an open window, then click a menu button.</span>
+          </div>
+          <div class="chips" id="actions-menu-btns">
+            <button class="chip" data-menu="Instagram">Instagram</button>
+            <button class="chip" data-menu="Home">Home</button>
+            <button class="chip" data-menu="Messages">Messages</button>
+            <button class="chip" data-menu="Search">Search</button>
+            <button class="chip" data-menu="Notifications">Notifications</button>
+            <button class="chip" data-menu="New post">New post</button>
+            <button class="chip" data-menu="Also from Meta">Also from Meta</button>
+            <button class="chip" data-setting="Settings">Settings</button>
+            <button class="chip" data-setting="Your activity">Your activity</button>
+            <button class="chip" data-setting="Saved">Saved</button>
+            <button class="chip" data-setting="Switch appearance">Switch appearance</button>
+            <button class="chip" data-setting="Report a problem">Report a problem</button>
+            <button class="chip" data-reel="Like">Reel Like</button>
+            <button class="chip" data-reel="Comment">Reel Comment</button>
+            <button class="chip" data-reel="Repost">Reel Repost</button>
+            <button class="chip" data-reel="Share">Reel Share</button>
+            <button class="chip" data-reel="Save">Reel Save</button>
+            <button class="chip" data-reel="More">Reel More</button>
+          </div>
+        </div>
+        <div class="banner" id="actions-menu-note">Pick an open window, then click a menu button.</div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-scrapping" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2><button type="button" class="panel-info" data-panel-info="scrapping"
+                    aria-label="About the Scrapping panel">i</button>Scrapping</h2>
+        <!-- data-head-action keeps these out of the title box and parks them beside
+             the >_ terminal button, which stays rightmost — see buildTerminal() in
+             app.js. Settings + its summary + the 🎯 target are run *configuration*,
+             so they belong up here; the two action buttons stay down in the body. -->
+        <button class="icon-btn" id="btn-scrap-settings" type="button" data-head-action
+                title="Settings — batch range, pause and scroll pace">⚙️</button>
+        <span class="hint scrap-summary" id="scrap-summary" data-head-action>pause 2800-4200ms · step 45-75%</span>
+        <label class="scrap-target-lbl" data-head-action
+               title="Stop each account after it has scraped this many usernames. 0 = unlimited — keep going until the feed and search stop yielding new handles (or you press Stop).">
+          🎯 <input type="number" id="scrap-target" min="0" step="50" value="0" placeholder="0" />
+          <span class="hint" id="scrap-target-hint">unlimited</span>
+        </label>
+      </div>
+      <div class="panel-body">
+        <div class="field">
+          <div class="scrap-pick-row">
+            <span class="cfg-k scrap-acct-label">Accounts</span>
+            <button class="btn scrap-all-btn" id="btn-scrap-all" type="button">Select all</button>
+            <div id="scrap-accounts" class="chip-picker chip-sm" role="group"
+                 aria-label="Open-window accounts to scrape">
+              <span class="hint">Loading open windows…</span>
+            </div>
+            <div class="scrap-controls">
+              <button class="btn" id="btn-search-scrap" type="button"
+                      title="Click Search in the Instagram sidebar and type 2 random letters, so suggestions appear. Nothing is clicked or sent.">🔎 Search-Scrapping</button>
+              <button class="btn btn-primary" id="btn-scrap">🧲 Scrapping</button>
+            </div>
+          </div>
+        </div>
+
+        <dialog class="modal" id="scrap-settings">
+          <form method="dialog" class="modal-box">
+            <div class="modal-head">
+              <h3>Scrapping settings</h3>
+              <button class="icon-btn" value="cancel" aria-label="Close">✕</button>
+            </div>
+
+            <div class="modal-body">
+              <p class="hint">A scrape stops when each account reaches its 🎯 target
+                count (set in the panel) — there is no time limit.</p>
+
+              <div class="cfg-sec-k">Feed scrolling — used when fetching usernames</div>
+
+              <label class="cfg">
+                <span class="cfg-k">Scroll pause</span>
+                <span class="cfg-in range">
+                  <input type="number" id="set-pause-min" min="200" max="15000" step="100"
+                         aria-label="Minimum pause between scroll steps" />
+                  <em>to</em>
+                  <input type="number" id="set-pause-max" min="200" max="15000" step="100"
+                         aria-label="Maximum pause between scroll steps" />
+                  <em>ms</em>
+                </span>
+                <span class="cfg-h">Wait after each step, picked in this range. Longer = slower.</span>
+              </label>
+
+              <label class="cfg">
+                <span class="cfg-k">Scroll step</span>
+                <span class="cfg-in range">
+                  <input type="number" id="set-step-min" min="5" max="100" step="5"
+                         aria-label="Minimum scroll step" />
+                  <em>to</em>
+                  <input type="number" id="set-step-max" min="5" max="100" step="5"
+                         aria-label="Maximum scroll step" />
+                  <em>% of window</em>
+                </span>
+                <span class="cfg-h">How far each step jumps. Bigger = faster, but skips more posts.</span>
+              </label>
+
+              <p class="hint">
+                Scrolling faster collects fewer names, not more: the feed loads lazily, so
+                outrunning it just skips posts.
+              </p>
+
+              <div class="cfg-sec-k">Search-Scrapping — 🔎 button</div>
+
+              <label class="cfg">
+                <span class="cfg-k">Search rounds</span>
+                <span class="cfg-in">
+                  <input type="number" id="set-search-rounds" min="1" max="1000" step="1"
+                         aria-label="Number of search rounds per account" />
+                  <em>searches per account (1-1000)</em>
+                </span>
+                <span class="cfg-h">How many 2-random-letter searches 🔎 Search-Scrapping runs
+                  on each account, harvesting every one's suggestions.</span>
+              </label>
+
+              <div class="cfg-sec-k">Both technique — batch range</div>
+
+              <label class="cfg">
+                <span class="cfg-k">Batch range</span>
+                <span class="cfg-in range">
+                  <input type="number" id="set-batch-min" min="1" max="500" step="1"
+                         aria-label="Minimum usernames per batch before switching technique" />
+                  <em>to</em>
+                  <input type="number" id="set-batch-max" min="1" max="500" step="1"
+                         aria-label="Maximum usernames per batch before switching technique" />
+                  <em>usernames</em>
+                </span>
+                <span class="cfg-h">For a <b>Both</b> account: collect a random number of new
+                  usernames in this range with one technique, then switch (scroll ⇄ search). A
+                  fresh size is drawn each batch — e.g. 13 by scrolling, then 9 by searching, …</span>
+              </label>
+
+              <label class="cfg">
+                <span class="cfg-k">Batch pause</span>
+                <span class="cfg-in range">
+                  <input type="number" id="set-batch-delay-min" min="0" max="3600" step="1"
+                         aria-label="Minimum seconds to stop between batches" />
+                  <em>to</em>
+                  <input type="number" id="set-batch-delay-max" min="0" max="3600" step="1"
+                         aria-label="Maximum seconds to stop between batches" />
+                  <em>seconds</em>
+                </span>
+                <span class="cfg-h">After each batch the account <b>stops</b> for a random time in
+                  this range before the next one, repeating until the run's time is up. 0 = no
+                  pause (batches run back to back).</span>
+              </label>
+            </div>
+
+            <div class="modal-foot">
+              <button class="btn btn-primary" id="btn-set-save" value="save">Save</button>
+              <button class="btn" value="cancel">Cancel</button>
+              <button class="btn btn-sm" id="btn-set-reset" type="button">Reset defaults</button>
+              <span class="hint" id="set-note"></span>
+            </div>
+          </form>
+        </dialog>
+        <div class="banner" id="scrap-note">Pick a logged-in account and start.</div>
+        <div id="scrap-list" class="list">
+          <p class="hint">Usernames will appear here as they are found.</p>
+        </div>
+        <pre class="out" id="out-scrap">Nothing scraped yet.</pre>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-accounts" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2>Accounts</h2>
+        <p>Each account keeps its own Chrome profile, so their sessions never overwrite each other.</p>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <button class="btn btn-primary" id="btn-acc-login">🔐 Log in selected</button>
+          <button class="btn" id="btn-acc-newlogin">🔄 New Login</button>
+          <button class="btn" id="btn-acc-check">Check Login Status</button>
+          <button class="btn" id="btn-acc-refresh">Refresh</button>
+          <button class="btn btn-danger" id="btn-acc-clearsess">Clear All Sessions</button>
+          <span class="hint" id="acc-count">0 selected</span>
+        </div>
+        <!-- two status lines, kept tight together rather than as full banners -->
+        <div class="status-stack">
+          <div class="banner" id="acc-active">No active account — click a card to pick one.</div>
+          <div class="banner" id="acc-default">Checking the default profile…</div>
+        </div>
+
+        <div id="accounts-grid" class="acc-grid">Loading…</div>
+
+        <p class="hint">
+          Saved to <code>backend/data/store.json</code> in plain text (gitignored, local only).
+          Logging several accounts in from one IP is the strongest ban signal Instagram has —
+          go slowly.
+        </p>
+        <pre class="out" id="out-accounts">—</pre>
+      </div>
+
+      <!-- outside .panel-body so it stays pinned to the bottom edge while the
+           cards above scroll. Fields stay a fixed width; only the gap grows. -->
+      <!-- autocomplete: Chrome's password manager sees a text+password pair and
+           autofills a saved localhost login back into these boxes after every
+           Add. "new-password" is the one hint it actually honours. -->
+      <form class="add-row" id="add-account" autocomplete="off">
+        <input class="mini" id="acc-label" placeholder="username"
+               aria-label="Username (optional)" autocomplete="off" />
+        <input class="mini" id="acc-login" placeholder="mail / phone"
+               aria-label="Email or phone" autocomplete="off" required />
+        <input class="mini" id="acc-pass" type="password" placeholder="password"
+               aria-label="Password" autocomplete="new-password" required />
+        <button class="btn btn-primary mini-btn" type="submit">+ Add</button>
+      </form>
+    </section>
+
+    <section class="panel" id="panel-config" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2>Typing Configuration</h2>
+        <p>How text is typed into Instagram — both the login form and the
+           Campaign's messages. <strong>Speed</strong> and <strong>Jitter</strong> add up per
+           keystroke, and <strong>Corrections</strong> adds extra keystrokes, so all three
+           decide how long a message takes to write.</p>
+      </div>
+      <div class="panel-body">
+        <div class="cfg-grid">
+          <label class="cfg">
+            <span class="cfg-k">Speed</span>
+            <span class="cfg-in">
+              <input type="number" id="cfg-speed" min="0" max="2000" step="10" />
+              <em>ms / character</em>
+            </span>
+            <span class="cfg-h">Delay between keystrokes.</span>
+          </label>
+
+          <label class="cfg">
+            <span class="cfg-k">Jitter</span>
+            <span class="cfg-in">
+              <input type="number" id="cfg-jitter" min="0" max="2000" step="10" />
+              <em>+0…n ms</em>
+            </span>
+            <span class="cfg-h">Random extra per key, so the pace isn’t robotic.</span>
+          </label>
+
+          <label class="cfg">
+            <span class="cfg-k">Correct every</span>
+            <span class="cfg-in">
+              <input type="number" id="cfg-every" min="1" max="100" step="1" />
+              <em>characters</em>
+            </span>
+            <span class="cfg-h">How many characters before a delete-and-retype.</span>
+          </label>
+
+          <label class="cfg">
+            <span class="cfg-k">Remove</span>
+            <span class="cfg-in range">
+              <input type="number" id="cfg-min" min="0" max="20" step="1" aria-label="Minimum characters removed" />
+              <em>to</em>
+              <input type="number" id="cfg-max" min="0" max="20" step="1" aria-label="Maximum characters removed" />
+              <em>chars</em>
+            </span>
+            <span class="cfg-h">Randomly picked in this range, then retyped.</span>
+          </label>
+
+          <label class="cfg cfg-toggle">
+            <span class="cfg-k">Corrections</span>
+            <span class="cfg-in">
+              <input type="checkbox" id="cfg-enabled" />
+              <em>enable delete &amp; retype</em>
+            </span>
+            <span class="cfg-h">Off = straight through, no backspaces.</span>
+          </label>
+
+          <label class="cfg cfg-toggle">
+            <span class="cfg-k">Press ENTER</span>
+            <span class="cfg-in">
+              <input type="checkbox" id="cfg-press-enter" />
+              <em>send after writing</em>
+            </span>
+            <span class="cfg-h">On = the Campaign presses Enter after writing/uploading, which
+              <strong>sends</strong>. Off = it only writes/uploads and leaves it in the box, unsent.</span>
+          </label>
+        </div>
+
+        <h3 class="cfg-subhead">🖱 Scrolling</h3>
+        <p class="cfg-subhint">How Scrapping scrolls the home feed while collecting usernames.
+          Nothing to do with typing — a shorter pause and a bigger step both make it faster,
+          but a bigger step skips more posts. The same values as
+          <strong>Scrapping → ⚙️ Settings</strong>; changing them here changes them there.</p>
+        <div class="cfg-grid">
+          <label class="cfg">
+            <span class="cfg-k">Scroll pause</span>
+            <span class="cfg-in range">
+              <input type="number" id="cfg-pause-min" min="200" max="15000" step="100" aria-label="Minimum pause between scroll steps" />
+              <em>to</em>
+              <input type="number" id="cfg-pause-max" min="200" max="15000" step="100" aria-label="Maximum pause between scroll steps" />
+              <em>ms</em>
+            </span>
+            <span class="cfg-h">Wait after each step, picked in this range. Shorter = faster —
+              but <strong>200ms is the floor</strong>: below that the scrape outruns the feed's
+              lazy loading and collects nothing.</span>
+          </label>
+
+          <label class="cfg">
+            <span class="cfg-k">Scroll step</span>
+            <span class="cfg-in range">
+              <input type="number" id="cfg-step-min" min="5" max="100" step="1" aria-label="Minimum scroll step percent" />
+              <em>to</em>
+              <input type="number" id="cfg-step-max" min="5" max="100" step="1" aria-label="Maximum scroll step percent" />
+              <em>% of window</em>
+            </span>
+            <span class="cfg-h">How far each step jumps. Bigger = faster, but skips more posts.</span>
+          </label>
+
+          <label class="cfg">
+            <span class="cfg-k">Duration</span>
+            <span class="cfg-in">
+              <input type="number" id="cfg-duration" min="60" max="300" step="5" aria-label="Seconds one scrape runs for" />
+              <em>seconds</em>
+            </span>
+            <span class="cfg-h">How long one scrape runs for.</span>
+          </label>
+        </div>
+
+        <h3 class="cfg-subhead">📣 Campaign batching</h3>
+        <p class="cfg-subhint">Run each account’s list in random-sized batches with a random minute
+          delay between them, instead of one long burst. The next-batch countdown shows in
+          <strong>📊 Campaign view</strong>.</p>
+        <div class="cfg-grid">
+          <label class="cfg cfg-toggle">
+            <span class="cfg-k">Batching</span>
+            <span class="cfg-in">
+              <input type="checkbox" id="cfg-batch-enabled" />
+              <em>send in batches</em>
+            </span>
+            <span class="cfg-h">Off = the whole list runs straight through.</span>
+          </label>
+
+          <label class="cfg">
+            <span class="cfg-k">Batch size</span>
+            <span class="cfg-in range">
+              <input type="number" id="cfg-batch-size-min" min="1" max="500" step="1" aria-label="Minimum rows per batch" />
+              <em>to</em>
+              <input type="number" id="cfg-batch-size-max" min="1" max="500" step="1" aria-label="Maximum rows per batch" />
+              <em>rows</em>
+            </span>
+            <span class="cfg-h">Rows per batch, picked at random in this range.</span>
+          </label>
+
+          <label class="cfg">
+            <span class="cfg-k">Batch delay</span>
+            <span class="cfg-in range">
+              <input type="number" id="cfg-batch-delay-min" min="0" max="240" step="1" aria-label="Minimum minutes between batches" />
+              <em>to</em>
+              <input type="number" id="cfg-batch-delay-max" min="0" max="240" step="1" aria-label="Maximum minutes between batches" />
+              <em>minutes</em>
+            </span>
+            <span class="cfg-h">Random wait between batches, in minutes.</span>
+          </label>
+
+          <label class="cfg">
+            <span class="cfg-k">Action every</span>
+            <span class="cfg-in range">
+              <input type="number" id="cfg-action-min" min="1" max="500" step="1" aria-label="Minimum rows between campaign actions" />
+              <em>to</em>
+              <input type="number" id="cfg-action-max" min="1" max="500" step="1" aria-label="Maximum rows between campaign actions" />
+              <em>rows</em>
+            </span>
+            <span class="cfg-h">During a campaign, after a random number of rows in this range,
+              one random Actions-panel action runs — then a fresh number is drawn (e.g. 10-20 → 13,
+              act, → 17, act, …).</span>
+          </label>
+        </div>
+
+        <h3 class="cfg-subhead">🧭 Panels</h3>
+        <p class="cfg-subhint">Enable or disable the buttons in the top navigation. Untick a panel to
+          disable its button — it stays visible but is greyed out and can’t be clicked; tick it to
+          enable it again. <strong>Config can’t be disabled</strong> — it’s how you reach these switches.
+          Applies immediately and is remembered in this browser (not part of Save).</p>
+        <div class="cfg-panels" id="cfg-panels"></div>
+
+        <div class="row">
+          <button class="btn btn-primary" id="btn-cfg-save">Save</button>
+          <button class="btn" id="btn-cfg-preview">Preview</button>
+          <button class="btn" id="btn-cfg-reset">Reset defaults</button>
+          <input class="mini" id="cfg-text" placeholder="preview text" style="flex:1 1 200px;width:auto" />
+        </div>
+
+        <div id="cfg-summary" class="banner">Preview to see what a login would look like.</div>
+        <pre class="out" id="out-config">—</pre>
+        <p class="hint">
+          Applies to the Accounts panel’s <strong>Log in selected</strong>. Varying key timing does
+          <strong>not</strong> hide automation from Instagram — it’s here because the login form only
+          enables its submit button after real keystroke events.
+        </p>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-tools" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2>Tool Registry</h2>
+        <p>Every tool the planner is allowed to call.</p>
+      </div>
+      <div class="panel-body">
+        <div id="tools-grid" class="grid">Loading…</div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-data" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2>Database</h2>
+        <p>Usernames live in MinIO (<code>insta-bot-usernames</code>); notes and drafts in
+           <code>backend/data/store.json</code>.</p>
+      </div>
+      <div class="panel-body">
+        <!-- the two views sit right under the title -->
+        <div class="row data-tabs" role="tablist" aria-label="Data views">
+          <button class="data-tab on" id="dtab-usernames" data-dtab="usernames" role="tab" type="button">usersBio</button>
+          <button class="data-tab" id="dtab-categorized" data-dtab="categorized" role="tab" type="button">Categorized data</button>
+          <button class="btn" id="btn-refresh">Refresh</button>
+        </div>
+
+        <div id="records" class="list">Loading…</div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-activity" role="tabpanel" hidden>
+      <div class="panel-head">
+        <h2>Activity</h2>
+        <p>Everything the app is doing, live — every panel, as it happens.</p>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <span class="live" id="live-dot"><i></i><span id="live-text">connecting…</span></span>
+          <span class="seg" id="act-filters" role="group" aria-label="Filter by source">
+            <button class="seg-b on" data-src="all">All</button>
+            <button class="seg-b" data-src="agent">agent</button>
+            <button class="seg-b" data-src="browser">browser</button>
+            <button class="seg-b" data-src="instagram">instagram</button>
+            <button class="seg-b" data-src="accounts">accounts</button>
+            <button class="seg-b" data-src="data">data</button>
+            <button class="seg-b" data-src="config">config</button>
+          </span>
+          <label class="chk"><input type="checkbox" id="act-errors" /> errors only</label>
+          <label class="chk"><input type="checkbox" id="act-follow" checked /> follow</label>
+          <button class="btn" id="btn-act-clear">Clear</button>
+          <span class="hint" id="act-count">0 events</span>
+        </div>
+        <div class="log" id="activity-log" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <div class="empty" id="empty">
+      <div class="empty-mark">◆</div>
+      <h2>Pick a panel above</h2>
+      <p>Each button opens its panel here.</p>
+    </div>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <!-- Shared popover for every .panel-info ⓘ; text comes from PANEL_HELP in app.js. -->
+  <div id="panel-info-pop" class="wiz-info-pop" hidden role="tooltip"></div>
+  <script src="app.js"></script>
+</body>
+</html>

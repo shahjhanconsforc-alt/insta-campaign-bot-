@@ -1,0 +1,2161 @@
+/* ── Blue & white theme ─────────────────────────────────────── */
+:root {
+  --blue-700: #1e40af;
+  --blue-600: #2563eb;
+  --blue-500: #3b82f6;
+  --blue-200: #bfdbfe;
+  --blue-100: #dbeafe;
+  --blue-50:  #eff6ff;
+  --ink:      #0f172a;
+  --ink-soft: #475569;
+  --ink-mute: #94a3b8;
+  --line:     #e2e8f0;
+  --white:    #ffffff;
+  --ok:       #16a34a;
+  --bad:      #dc2626;
+  --shadow:   0 1px 2px rgba(15,23,42,.06), 0 8px 24px rgba(30,64,175,.08);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: linear-gradient(180deg, var(--blue-50) 0%, #f8fafc 320px);
+  color: var(--ink);
+  /* full-height column: topbar + tabbar size to content, .stage takes the rest
+     so the open panel reaches the bottom of the window */
+  min-height: 100vh; height: 100vh;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+/* .panel/.empty below set display:flex, which would beat the hidden attribute's
+   own display:none and show every panel at once. This has to win. */
+[hidden] { display: none !important; }
+
+/* ── Top bar ────────────────────────────────────────────────── */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+  padding: 14px;
+  background: linear-gradient(100deg, var(--blue-700), var(--blue-500));
+  color: var(--white);
+  box-shadow: var(--shadow);
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-mark {
+  display: grid; place-items: center;
+  width: 40px; height: 40px; border-radius: 10px;
+  background: rgba(255,255,255,.18); font-size: 18px;
+}
+.brand h1 { font-size: 19px; font-weight: 650; letter-spacing: -.2px; }
+.brand p  { font-size: 12px; opacity: .8; }
+
+.health { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 12px; border-radius: 999px;
+  background: rgba(255,255,255,.14);
+  font-size: 12px; font-weight: 550;
+}
+.pill i {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ink-mute); transition: background .2s;
+}
+.pill.up i   { background: #4ade80; box-shadow: 0 0 0 3px rgba(74,222,128,.25); }
+.pill.down i { background: #f87171; box-shadow: 0 0 0 3px rgba(248,113,113,.25); }
+
+/* The MinIO pill is a button — it opens the logs terminal. Looks like the other
+   pills, but shows it's clickable. */
+.pill-btn {
+  border: 1px solid rgba(255,255,255,.22); cursor: pointer;
+  color: inherit; font: inherit; font-size: 12px; font-weight: 550;
+}
+.pill-btn:hover { background: rgba(255,255,255,.28); }
+.pill-btn::after { content: '›_'; margin-left: 2px; opacity: .6; font-size: 11px; letter-spacing: -1px; }
+
+/* MinIO logs terminal (opens from the pill). Width goes on the DIALOG, not the
+   inner box — the box just fills it. Setting it on .modal-box left the dialog at
+   its 560px default, so a wider box overflowed off the left and clipped the
+   title and the start of every log line. */
+#minio-term { width: min(760px, calc(100vw - 32px)); }
+.modal-term .modal-head { gap: 8px; }
+.modal-term .modal-head h3 { display: flex; align-items: center; gap: 9px; }
+.mio-state {
+  padding: 1px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+  letter-spacing: .3px; text-transform: uppercase;
+  background: #f1f5f9; color: #64748b;
+}
+.mio-state.up   { background: #f0fdf4; color: #15803d; }
+.mio-state.down { background: #fef2f2; color: #b91c1c; }
+.mio-endpoint { margin-left: auto; font-size: 11.5px; color: var(--ink-mute);
+                font-family: "Cascadia Code", Consolas, monospace; }
+.mio-out {
+  margin: 0; border-radius: 0 0 12px 12px; max-height: 60vh; min-height: 220px;
+  font-size: 12px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+  overflow-y: auto; overflow-x: hidden;   /* wrap long lines, never scroll sideways */
+}
+.mio-line { display: block; }
+/* Per-level colouring inside the terminal. */
+.mio-line.warn  { color: #fcd34d; }
+.mio-line.error { color: #fca5a5; }
+.mio-line .mio-t { color: #64748b; margin-right: 8px; }
+
+/* Live run status in the header — blinks while stopped/paused. */
+.run-status {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 14px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 700; letter-spacing: .2px;
+  background: rgba(248,113,113,.22); color: #fff;
+  border: 1px solid rgba(255,255,255,.35);
+  animation: run-blink 1s steps(1, end) infinite;
+}
+.run-status .run-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: #fff;
+  box-shadow: 0 0 0 3px rgba(255,255,255,.3);
+}
+/* Paused reads calmer (amber) and blinks slower than a hard Stop. */
+.run-status.paused {
+  background: rgba(251,191,36,.28); animation-duration: 1.6s;
+}
+.run-status.paused .run-dot { background: #fde68a; }
+@keyframes run-blink { 50% { opacity: .28; } }
+@media (prefers-reduced-motion: reduce) { .run-status { animation: none; } }
+
+/* Run controls, sat with the health pills: stop / pause / start fresh. */
+.ctl-sep {
+  width: 1px; height: 18px; margin: 0 2px;
+  background: rgba(255,255,255,.28);
+}
+.ctl {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0;
+  border: 1px solid rgba(255,255,255,.22); border-radius: 8px;
+  background: rgba(255,255,255,.14); color: #fff;
+  font-size: 14px; line-height: 1; cursor: pointer;
+  transition: background .15s, border-color .15s, opacity .15s;
+}
+.ctl:hover:not(:disabled) { background: rgba(255,255,255,.28); }
+.ctl:disabled { opacity: .4; cursor: not-allowed; }
+/* Paused is a state, not a click — keep it lit while it holds. */
+.ctl[aria-pressed="true"] {
+  background: #fbbf24; border-color: #fbbf24; color: #422006; font-weight: 700;
+}
+#btn-stop:hover:not(:disabled) { background: #f87171; border-color: #f87171; }
+/* Something is actually running — the stop button is worth looking at. */
+.ctl.live { box-shadow: 0 0 0 3px rgba(248,113,113,.3); }
+
+/* ── Tab buttons ────────────────────────────────────────────── */
+.tabbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; gap: 4px; flex-wrap: wrap;
+  /* no bottom padding: the tabs sit directly on the line */
+  padding: 10px 14px 0;
+  background: rgba(255,255,255,.92);
+  backdrop-filter: blur(8px);
+  border-bottom: 2px solid var(--blue-200);   /* the line under the buttons */
+}
+.tab {
+  padding: 9px 16px;
+  border: 1px solid transparent;
+  border-radius: 6px 6px 0 0;                 /* a box, not a pill */
+  margin-bottom: -2px;                        /* overlap the line by its width */
+  background: transparent; color: var(--ink-soft);
+  font: inherit; font-size: 14px; font-weight: 550;
+  cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+}
+.tab:hover:not(:disabled) { background: var(--blue-50); color: var(--blue-600); }
+.tab:active:not(:disabled) { background: var(--blue-100); }
+.tab.active {
+  background: var(--blue-600);               /* solid blue box for the open panel */
+  border-color: var(--blue-600);
+  color: var(--white);
+}
+/* Disabled in Config → 🧭 Panels: still visible, but greyed and unclickable. */
+.tab:disabled, .tab.tab-off {
+  opacity: .38; cursor: not-allowed; color: var(--ink-mute);
+  background: transparent; border-color: transparent;
+}
+.tab:focus-visible, .btn:focus-visible, .chip:focus-visible {
+  outline: 2px solid var(--blue-700); outline-offset: 2px;
+}
+
+/* ── Panels ─────────────────────────────────────────────────── */
+/* No max-width: panels run the full width of the window, with just enough
+   breathing room at the edges. Keep this padding in step with .topbar/.tabbar
+   below so the brand, the tabs and the panel edge all line up. */
+/* flex:1 = soak up the leftover height. No bottom margin: the panel is meant to
+   meet the bottom edge of the window. min-height:0 lets the child scroll
+   instead of pushing the stage taller than the viewport. */
+.stage {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  width: 100%;
+  margin: 14px auto 0; padding: 0 14px;
+}
+
+.panel {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-bottom: none;              /* it sits on the window edge */
+  /* square: the radius here was what rounded .panel-head's top corners and
+     .panel-body's bottom corners via overflow:hidden */
+  border-radius: 0;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  animation: rise .22s ease-out;
+}
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+.panel-head {
+  flex: none;                      /* stays put while the body scrolls */
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px 12px 18px;
+  background: var(--blue-50);
+  border-bottom: 1px solid var(--line);
+}
+
+/* The right-hand cluster of .panel-head: panel actions (Close browser) with
+   the >_ toggle pinned on the end. */
+.head-tools { display: flex; align-items: center; gap: 8px; flex: none; }
+
+/* ── Terminal drawer ────────────────────────────────────────── */
+.term-btn {                        /* lives at the right of .panel-head */
+  position: relative; flex: none;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--white); color: var(--ink-soft);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 13px; font-weight: 700; line-height: 1;
+  padding: 7px 10px; cursor: pointer; transition: all .15s;
+}
+.term-btn:hover { border-color: var(--blue-500); color: var(--blue-600); }
+.term-btn.on { background: var(--ink); border-color: var(--ink); color: #4ade80; }
+.term-btn.dot::after {             /* output arrived while the drawer was shut */
+  content: ""; position: absolute; top: -3px; right: -3px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--blue-600); border: 1.5px solid var(--white);
+}
+.term-btn:focus-visible { outline: 2px solid var(--blue-700); outline-offset: 2px; }
+
+.panel-main { flex: 1; min-height: 0; display: flex; }
+
+.term {
+  flex: 0 0 min(400px, 42%);
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--ink);
+  border-right: 1px solid var(--line);
+  animation: slide-in .18s ease-out;
+}
+@keyframes slide-in { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+
+.term-head {
+  flex: none;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px 6px 12px;
+  background: #0b1220; border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.term-title {
+  color: #94a3b8; font-size: 11.5px; letter-spacing: .4px;
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+.term-x {
+  border: none; background: transparent; color: #64748b;
+  font-size: 13px; line-height: 1; padding: 3px 6px;
+  border-radius: 4px; cursor: pointer;
+}
+.term-x:hover { background: rgba(248,113,113,.15); color: #fca5a5; }
+
+/* fill the drawer instead of the 380px cap it has inside a panel body */
+.term .out { flex: 1; min-height: 0; max-height: none; border-radius: 0; }
+
+@media (max-width: 720px) {        /* too narrow to sit side by side */
+  .panel-main { flex-direction: column; }
+  .term { flex: 0 0 45%; border-right: none; border-bottom: 1px solid var(--line); }
+}
+.panel-head h2 { font-size: 17px; color: var(--blue-700); }
+/* circled ⓘ in FRONT of a panel title — hover/focus/tap shows what the panel does,
+   which keeps the header to one line instead of a paragraph under it. */
+.panel-head h2 .panel-info {
+  flex: none; width: 16px; height: 16px; margin-right: 7px; padding: 0;
+  border: 1px solid currentColor; border-radius: 50%; background: none;
+  color: inherit; cursor: pointer; vertical-align: 2px;
+  font-family: Georgia, "Times New Roman", serif; font-size: 11px; font-style: italic;
+  font-weight: 700; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center; opacity: .5;
+  transition: opacity .12s, background .12s;
+}
+.panel-head h2 .panel-info:hover,
+.panel-head h2 .panel-info:focus-visible { opacity: 1; background: var(--blue-100); }
+.panel-head p  { font-size: 13px; color: var(--ink-soft); margin-top: 3px; }
+.panel-body {
+  flex: 1; min-height: 0; overflow-y: auto;   /* tall content scrolls in here */
+  padding: 18px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+
+/* ── Controls ───────────────────────────────────────────────── */
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.field { display: flex; flex-direction: column; gap: 10px; }
+
+input, textarea {
+  flex: 1; min-width: 180px;
+  padding: 10px 13px;
+  border: 1px solid var(--line); border-radius: 9px;
+  font: inherit; font-size: 14px; color: var(--ink);
+  background: var(--white); resize: vertical;
+}
+input:focus, textarea:focus {
+  outline: none; border-color: var(--blue-500);
+  box-shadow: 0 0 0 3px var(--blue-100);
+}
+
+.btn {
+  padding: 10px 16px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--white); color: var(--ink-soft);
+  font: inherit; font-size: 14px; font-weight: 550;
+  cursor: pointer; transition: all .15s; white-space: nowrap;
+}
+.btn:hover:not(:disabled) { border-color: var(--blue-500); color: var(--blue-600); }
+.btn:disabled { opacity: .55; cursor: progress; }
+.btn-primary {
+  background: var(--blue-600); border-color: var(--blue-600); color: var(--white);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--blue-700); border-color: var(--blue-700); color: var(--white);
+}
+.btn-lg { padding: 12px 22px; font-size: 15px; }
+/* sized to sit level with .term-btn in a .panel-head */
+.btn-sm { padding: 7px 11px; font-size: 12.5px; border-radius: 6px; }
+.btn-ghost { background: var(--blue-50); border-color: var(--blue-100); color: var(--blue-700); }
+.btn-danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
+
+.hint { font-size: 12px; color: var(--ink-mute); }
+
+/* panel-level notes, pinned to the foot of the panel */
+.panel-note {
+  flex: none;
+  padding: 7px 14px;
+  background: var(--blue-50);
+  border-top: 1px solid var(--line);
+}
+.panel-note p {
+  font-size: 11.5px; line-height: 1.45; color: var(--ink-mute);
+}
+.panel-note p + p { margin-top: 3px; }
+
+.chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip {
+  padding: 6px 12px; border-radius: 999px;
+  border: 1px dashed var(--blue-100); background: var(--blue-50);
+  color: var(--blue-700); font: inherit; font-size: 12px; cursor: pointer;
+}
+.chip:hover { border-style: solid; border-color: var(--blue-500); }
+
+/* ── Output ─────────────────────────────────────────────────── */
+.out {
+  background: var(--ink); color: #e2e8f0;
+  border-radius: 9px; padding: 14px;
+  font-family: "Cascadia Code", Consolas, monospace; font-size: 12.5px;
+  line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+  max-height: 380px; overflow: auto;
+}
+.out.err { background: #450a0a; color: #fecaca; }
+
+.banner {
+  padding: 11px 14px; border-radius: 9px; font-size: 13px;
+  background: var(--blue-50); border: 1px solid var(--blue-100); color: var(--blue-700);
+}
+
+/* Status lines, not banners: small and stacked tight. The panel-body's 16px
+   gap would otherwise push them apart, so they're grouped as one child. */
+.status-stack { display: flex; flex-direction: column; gap: 2px; }
+.status-stack .banner {
+  padding: 4px 9px; border-radius: 5px;
+  font-size: 11px; line-height: 1.4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Two related lines inside ONE banner. Kept as a single panel-body child on
+   purpose: as separate children the 16px gap pushes them apart. */
+.banner-stack { display: flex; flex-direction: column; gap: 3px; }
+.banner-stack .hint { color: inherit; opacity: .7; }
+
+.banner.bad { background: #fef2f2; border-color: #fecaca; color: var(--bad); }
+.banner.good { background: #f0fdf4; border-color: #bbf7d0; color: var(--ok); }
+
+/* ── Grid / list ────────────────────────────────────────────── */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.card {
+  border: 1px solid var(--line); border-radius: 10px; padding: 14px;
+  background: var(--white); transition: all .15s;
+}
+.card:hover { border-color: var(--blue-500); box-shadow: 0 4px 14px rgba(37,99,235,.1); }
+.card h3 { font-size: 14px; color: var(--blue-700); margin-bottom: 5px; }
+.card p  { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; }
+.card code {
+  display: inline-block; margin-top: 8px; font-size: 11px;
+  background: var(--blue-50); color: var(--blue-600);
+  padding: 2px 7px; border-radius: 5px;
+}
+
+.list { display: flex; flex-direction: column; gap: 8px; }
+
+/* Smart username list — small font, packed into columns, click a name to copy. */
+.name-count { display: flex; align-items: center; gap: 8px;
+              font-size: 10.5px; color: var(--ink-mute); text-transform: uppercase;
+              letter-spacing: .04em; margin-bottom: 6px; }
+/* the Full-preview button sits at the right of the heading, un-uppercased */
+.name-count .btn { margin-left: auto; text-transform: none; letter-spacing: 0; padding: 3px 9px; }
+/* a quieter trailing note on the count line (e.g. how many were left out) */
+.name-count .nc-sub { text-transform: none; letter-spacing: 0; opacity: .75; font-weight: 400; }
+.name-list {
+  list-style: none; margin: 0; padding: 0;
+  columns: 140px;              /* auto-fit as many narrow columns as fit */
+  column-gap: 10px;
+}
+.name-list li { break-inside: avoid; margin: 0 0 3px; }
+
+/* Scrollable variant: flows left-to-right and wraps, so a vertical scrollbar
+   works (the multi-column base flows top-to-bottom, which vertical scroll
+   can't follow). Shows 4 rows, then scrolls. */
+.name-list--scroll {
+  columns: initial;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  grid-auto-rows: 24px;
+  gap: 3px 10px;
+  max-height: 105px;           /* 4 rows × 24px + 3 gaps × 3px */
+  overflow-y: auto;
+  padding-right: 4px;          /* room for the scrollbar */
+}
+.name-list--scroll li { margin: 0; break-inside: auto; }
+
+/* ── Data panel: the two-tab bar + the username·bio·category table ── */
+.data-tabs { align-items: center; gap: 6px; }
+.data-tabs .btn { margin-left: auto; }
+.data-tab {
+  border: 1px solid var(--line); border-radius: 999px; background: var(--white);
+  color: var(--ink-mute); cursor: pointer; font-size: 12px; font-weight: 600;
+  padding: 4px 12px; transition: background .12s, color .12s, border-color .12s;
+}
+.data-tab:hover { border-color: var(--blue-200); color: var(--blue-700); }
+.data-tab.on { background: var(--blue-600); border-color: var(--blue-600); color: #fff; }
+/* Two columns: the table (≈80%) beside the category/filter column (≈20%). */
+.data-cat-layout {
+  display: grid; grid-template-columns: minmax(0, 4fr) minmax(150px, 1fr);
+  gap: 12px; align-items: start;
+}
+/* no side column (the wizard's file source) — let the table have the full width */
+.data-cat-layout--full { grid-template-columns: minmax(0, 1fr); }
+.data-cat-main { min-width: 0; }          /* min-width:0 lets the table scroll, not overflow */
+/* min-width:0 overrides the base `input` rule (min-width:180px) so the boxes fit
+   the narrow side column in the campaign modal. */
+.data-cat-search {
+  width: 100%; min-width: 0; padding: 5px 9px; margin-bottom: 8px; font-size: 12px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--white); color: var(--ink);
+}
+.data-cat-wrap { max-height: 64vh; overflow: auto; border: 1px solid var(--line); border-radius: 9px; }
+
+/* Right column: the searchable, tickable category list. */
+.data-cat-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.data-cat-side-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--ink-mute); font-weight: 600;
+}
+.data-cat-side-actions { display: flex; gap: 4px; }
+.data-cat-side-actions button {
+  border: 1px solid var(--line); border-radius: 6px; background: var(--white);
+  color: var(--blue-700); font-size: 10px; font-weight: 600; padding: 1px 7px;
+  cursor: pointer; text-transform: none; letter-spacing: 0;
+}
+.data-cat-side-actions button:hover { background: var(--blue-50); border-color: var(--blue-200); }
+.data-cat-list-search {
+  width: 100%; min-width: 0; padding: 4px 8px; font-size: 11.5px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--white); color: var(--ink);
+}
+.data-cat-list {
+  display: flex; flex-direction: column; gap: 1px;
+  max-height: calc(64vh - 34px); overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 8px; padding: 4px;
+}
+.data-cat-item {
+  display: flex; align-items: center; gap: 7px; padding: 3px 6px; border-radius: 6px;
+  cursor: pointer; font-size: 11.5px; color: var(--ink); user-select: none;
+}
+.data-cat-item:hover { background: var(--blue-50); }
+.data-cat-item.on { background: var(--blue-50); }
+/* reset the base `input` rule (flex:1, min-width:180px) or the checkbox stretches
+   to 180px and shoves the label to the right */
+.data-cat-item input {
+  width: 14px; height: 14px; min-width: 0; flex: 0 0 14px;
+  accent-color: var(--blue-600); margin: 0; cursor: pointer;
+}
+/* the label hugs the checkbox (doesn't stretch); the count is pushed to the far right */
+.data-cat-item .dc-name {
+  flex: 0 1 auto; min-width: 0; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.data-cat-item .dc-n {
+  flex: none; margin-left: auto; padding-left: 6px;
+  font-size: 10px; color: var(--ink-mute); font-variant-numeric: tabular-nums;
+}
+.data-cat-empty-list { font-size: 11px; color: var(--ink-mute); padding: 6px; }
+.data-cat-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.data-cat-table th {
+  text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--ink-mute); font-weight: 600; padding: 6px 8px; background: var(--white);
+  border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1;
+}
+.data-cat-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.data-cat-table tr:last-child td { border-bottom: 0; }
+.data-cat-table .dc-num { color: var(--ink-mute); font-variant-numeric: tabular-nums; white-space: nowrap; width: 1%; }
+.data-cat-table .dc-user { white-space: nowrap; }
+.data-cat-table .dc-user .name-chip { width: auto; display: inline-block; }
+/* small "×N" badge — how many times this handle has been used in a campaign */
+.data-cat-table .dc-used {
+  margin-left: 5px; font-size: 9.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--blue-700); background: var(--blue-50); border: 1px solid var(--blue-100);
+  border-radius: 999px; padding: 0 5px; vertical-align: middle; white-space: nowrap;
+}
+.data-cat-table .dc-bio { color: var(--ink); line-height: 1.4; min-width: 220px; max-width: 460px; word-break: break-word; }
+.data-cat-table .dc-cat { white-space: nowrap; }
+/* the category pill in the table's last column */
+.dc-cat-tag {
+  display: inline-block; font-size: 11px; font-weight: 600; color: var(--blue-700);
+  background: var(--blue-50); border: 1px solid var(--blue-100);
+  border-radius: 999px; padding: 1px 8px; white-space: nowrap;
+}
+.data-cat-table .dc-empty { color: var(--ink-mute); }
+
+/* Row number before each name (Data + Campaign lists). */
+.name-num {
+  flex: none; min-width: 2ch; text-align: right;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 9.5px; color: var(--ink-mute);
+}
+/* Campaign chips are numbered, so each <li> becomes a number + tag + chip row. */
+.name-li { display: flex; align-items: center; gap: 5px; }
+.name-li .name-chip { flex: 1 1 auto; width: auto; min-width: 0; }
+/* Campaign assignment badge (account · sms · image), read before the name. */
+.assign-tag {
+  flex: none; padding: 1px 6px; border-radius: 999px;
+  background: var(--blue-100); color: var(--blue-700);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .2px; white-space: nowrap;
+}
+/* No assignment yet: the span still has to occupy its grid cell (see
+   campaignChipHTML) but shouldn't paint an empty pill. */
+.assign-tag:empty { background: none; padding: 0; }
+.data-section { display: flex; flex-direction: column; gap: 8px; }
+.data-section + .data-section {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* Data panel: give the names the whole panel instead of a short 4-row window.
+   The record list fills the body, the names section grows to take the slack, and
+   the name grid scrolls inside it — so far more names are visible at once. */
+#panel-data .panel-body { min-height: 0; }
+#panel-data #records {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px;
+}
+#panel-data .data-section:has(.data-name-list) { flex: 1; min-height: 0; }
+#panel-data .data-name-list.name-list--scroll {
+  flex: 1; min-height: 0; max-height: none;   /* fill, not a fixed 105px cap */
+}
+/* The other records (drafts) sit under the names, capped so a long list scrolls
+   rather than pushing the names area shut. The usersBio list is a full-height
+   view like the name grid, so it's excluded from the cap too. */
+#panel-data .data-section:not(:has(.data-name-list)):not(:has(.usersbio-list)) {
+  flex: none; max-height: 30vh; overflow-y: auto;
+}
+/* usersBio view: a scrolling one-row-per-handle list of @name + its scraped bio.
+   Fills the panel to the bottom and scrolls inside, like the name grid it replaced.
+   (max-height:none defeats the 30vh drafts cap that would otherwise clip it.) */
+#panel-data .data-section:has(.usersbio-list) { flex: 1; min-height: 0; max-height: none; }
+.usersbio-list {
+  list-style: none; margin: 0; padding: 0 4px 0 0;
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.ub-row {
+  display: grid;
+  grid-template-columns: 2.5ch minmax(120px, 200px) 1fr auto;
+  align-items: start; gap: 8px;
+  padding: 5px 2px; border-bottom: 1px solid var(--line);
+}
+.ub-row:last-child { border-bottom: 0; }
+.ub-row .name-num { margin-top: 3px; }
+.ub-chip { align-self: start; }
+.ub-bio {
+  font-size: 10.5px; color: var(--ink-mute); line-height: 1.4; padding-top: 2px;
+  overflow-wrap: anywhere; word-break: break-word;
+}
+.ub-bio-empty { font-style: italic; opacity: .7; }
+.ub-row .name-del { align-self: start; }
+
+.name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.name-row .name-chip { flex: 1 1 auto; min-width: 0; }
+.name-del {
+  flex: none;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--ink-mute);
+  border-radius: 5px;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 5px;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.name-del:hover { color: var(--bad); border-color: var(--bad); background: #fef2f2; }
+.name-chip {
+  display: block; width: 100%; text-align: left;
+  border: 1px solid transparent; border-radius: 5px;
+  background: none; cursor: pointer;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11.5px; line-height: 1.5; color: var(--ink);
+  padding: 1px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background .12s, border-color .12s;
+}
+.name-chip::before { content: "@"; color: var(--ink-mute); }
+.name-chip:hover { background: var(--blue-50); border-color: var(--blue-200); color: var(--blue-700); }
+/* Searched but nothing opened — dimmed and struck so misses stay visible. */
+.name-chip-miss { color: var(--ink-mute); text-decoration: line-through; }
+
+/* Searched and "Hello" written this session — skipped by the next run. Held in
+   memory only, so a refresh clears every tick.
+   The tick goes in ::after: .name-chip::before already puts the "@" in front,
+   so a tick at the start would render "@✓name". */
+.name-chip-done { color: var(--ok); }
+.name-chip-done::after { content: " ✓"; font-weight: 700; }
+
+/* Compact one-line version of a .cfg block: label, small input, hint, button. */
+.cfg-mini { gap: 8px; }
+.cfg-mini input {
+  flex: 0 0 66px; min-width: 66px;
+  padding: 6px 8px; font-size: 12.5px; border-radius: 6px;
+}
+.cfg-mini .cfg-k { font-size: 12px; }
+.cfg-mini em { font-style: normal; }
+.item {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+  border: 1px solid var(--line); border-left: 3px solid var(--blue-500);
+  border-radius: 8px; padding: 11px 14px; background: var(--white);
+}
+.item h4 { font-size: 13.5px; }
+.item p  { font-size: 12.5px; color: var(--ink-soft); margin-top: 2px; word-break: break-word; }
+.item time { font-size: 11px; color: var(--ink-mute); }
+.item.fail { border-left-color: var(--bad); }
+.item.pass { border-left-color: var(--ok); }
+.x {
+  border: none; background: none; color: var(--ink-mute);
+  font-size: 17px; cursor: pointer; line-height: 1; padding: 2px 6px;
+}
+.x:hover { color: var(--bad); }
+
+#shot-wrap { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+#shot { display: block; width: 100%; }
+
+/* ── Account cards ──────────────────────────────────────────── */
+.acc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+
+.acc {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 11px;
+  background: var(--white);
+  cursor: pointer;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.acc:hover { border-color: var(--blue-500); }
+.acc.sel {
+  background: var(--blue-50);
+  border-color: var(--blue-600);
+  box-shadow: 0 0 0 2px var(--blue-100);
+}
+
+/* tick — only on the selected card */
+.acc .tick {
+  position: absolute; top: 8px; right: 8px;
+  width: 18px; height: 18px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--blue-600); color: var(--white);
+  font-size: 11px; line-height: 1;
+  opacity: 0; transform: scale(.6); transition: all .15s;
+}
+.acc.sel .tick { opacity: 1; transform: scale(1); }
+
+.acc-top { display: flex; align-items: center; gap: 6px; padding-right: 22px; }
+.acc-state { font-size: 11px; line-height: 1; flex: none; }   /* logged in/out icon */
+.acc-name {
+  font-size: 13px; font-weight: 600; color: var(--ink);
+  flex: 0 1 auto; min-width: 0;                     /* shrink & truncate, never push the row wider */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* "active" tag — a real element, not ::after on the name, so a long name can't
+   clip it. flex:none keeps it whole. */
+.acc-badge {
+  flex: none; font-size: 9px; font-weight: 600; letter-spacing: .4px;
+  color: var(--blue-700); background: var(--blue-100);
+  padding: 1px 5px; border-radius: 4px;
+}
+.acc.logged-in .acc-badge { color: #92400e; background: #fde68a; }
+.acc-login {
+  font-size: 11.5px; color: var(--ink-soft); margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.acc-pass {
+  display: flex; align-items: center; gap: 5px; margin-top: 6px;
+}
+.acc-pass code {
+  flex: 1; font-size: 11px; color: var(--ink-soft);
+  background: var(--blue-50); border-radius: 4px;
+  padding: 3px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.icon-btn {
+  border: 1px solid var(--line); background: var(--white);
+  border-radius: 5px; padding: 2px 5px; font-size: 11px;
+  cursor: pointer; line-height: 1.3; color: var(--ink-soft);
+}
+.icon-btn:hover { border-color: var(--blue-500); color: var(--blue-600); }
+.icon-btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+.icon-btn.ok { border-color: #86efac; color: #166534; background: #f0fdf4; }
+.icon-btn.ok:hover:not(:disabled) { border-color: var(--ok); background: #dcfce7; }
+.icon-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.acc-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 6px; margin-top: 7px;
+  border-top: 1px solid var(--line); padding-top: 6px;
+}
+.acc-meta { font-size: 10.5px; color: var(--ink-mute); }
+
+/* Yellow = a valid stored session: this account is logged in, needs no login,
+   and so can't be queued for one. */
+.acc.logged-in {
+  background: #fffbeb; border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(251,191,36,.25);
+  cursor: default;                 /* logged in — can't be selected for a login */
+}
+.acc.logged-in .acc-name { color: #92400e; }
+.acc.logged-in:hover { border-color: #f59e0b; }   /* no blue hover: it isn't clickable */
+.acc.logged-in .acc-sess dd.ok { color: #b45309; }
+.icon-btn.warn:hover { border-color: #d97706; color: #b45309; background: #fffbeb; }
+
+/* the active account — the one both panels act on */
+.acc.active { border-color: var(--blue-600); box-shadow: 0 0 0 2px var(--blue-100); }
+.acc.logged-in.active { border-color: #d97706; box-shadow: 0 0 0 2px rgba(251,191,36,.4); }
+.acc .lock { font-size: 10px; margin-left: auto; flex: none; }
+
+/* session metadata table */
+.acc-sess {
+  display: grid; grid-template-columns: auto 1fr; gap: 1px 8px;
+  margin-top: 7px; padding-top: 6px; border-top: 1px dashed var(--line);
+}
+.acc-sess dt { font-size: 9.5px; color: var(--ink-mute); text-transform: uppercase; letter-spacing: .3px; }
+.acc-sess dd {
+  font-size: 10.5px; color: var(--ink-soft);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acc-sess dd.ok  { color: var(--ok); font-weight: 600; }
+.acc-sess dd.off { color: var(--ink-mute); }
+
+/* ── Add-account bar: pinned to the bottom of the panel ─────── */
+.add-row {
+  flex: none;                       /* a footer, not part of the scroll area */
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  /* runs the full panel width, i.e. right up to the window edges */
+  padding: 9px 14px;
+  border: none; border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--blue-50);
+}
+.add-row .mini {
+  /* the three fields share the bar equally, capped at 30% each so together
+     they span ~90% and the + Add button keeps its own size */
+  flex: 1 1 0; width: auto; min-width: 110px; max-width: 30%;
+  height: 30px; padding: 3px 9px; font-size: 12.5px;
+  border-radius: 6px;
+}
+.add-row .mini-btn { flex: none; height: 30px; padding: 0 14px; font-size: 12.5px; }
+
+/* ── Config panel ───────────────────────────────────────────── */
+.cfg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+.cfg-subhead {
+  margin: 18px 0 4px; font-size: 13px; font-weight: 650; color: var(--blue-700);
+  border-top: 1px solid var(--line); padding-top: 14px;
+}
+.cfg-subhint { font-size: 11.5px; color: var(--ink-soft); margin-bottom: 10px; line-height: 1.5; }
+
+/* 🧭 Panels: a grid of tickable chips, one per nav button. Ticked = the button shows. */
+.cfg-panels {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px;
+}
+.cfg-panel-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--white); cursor: pointer; user-select: none;
+  font-size: 12.5px; color: var(--ink-mute); transition: border-color .12s, background .12s, color .12s;
+}
+.cfg-panel-item:hover { border-color: var(--blue-200); }
+.cfg-panel-item.on { border-color: var(--blue-200); background: var(--blue-50); color: var(--ink); }
+.cfg-panel-item input[type="checkbox"] { flex: none; min-width: 0; margin: 0; cursor: pointer; }
+.cfg-panel-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Account picker: label + select, sized to its content so it doesn't stretch
+   like a text input would. */
+.picker { display: flex; align-items: center; gap: 6px; flex: none; }
+.picker select {
+  flex: none; min-width: 150px; max-width: 260px;
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--white); color: var(--ink); font: inherit; font-size: 13px;
+  cursor: pointer;
+}
+.picker select:disabled { opacity: .6; cursor: not-allowed; }
+
+/* Settings pop-up. A native <dialog>: Esc-to-close, focus trapping and the
+   backdrop come free, so there's no overlay/z-index machinery to maintain. */
+.modal {
+  /* Dead-centre. The global `* { margin: 0 }` reset kills the native dialog's
+     margin:auto centering, so showModal() would otherwise pin it top-left —
+     position it against the viewport by hand instead. */
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  padding: 0; border: none; border-radius: 12px;
+  width: min(560px, calc(100vw - 32px));
+  background: var(--white); color: var(--ink);
+  box-shadow: 0 18px 50px rgba(15,23,42,.28);
+}
+.modal::backdrop { background: rgba(15,23,42,.45); }
+/* Full-preview lists many names side by side, so it's wider than the settings
+   dialog — 560px + 50%. */
+#campaign-preview { width: min(840px, calc(100vw - 32px)); }
+/* Campaign monitor is a wide table — 960px + 20%, so the extra Batch column
+   doesn't crowd the username. */
+#campaign-view { width: min(1152px, calc(100vw - 32px)); }
+
+/* Dense read-out: this is a monitor you scan, not prose. Smaller type and tight
+   rows fit far more names on screen at once. Scoped to this dialog so the
+   Full-preview and settings modals keep their comfortable sizing. */
+#campaign-view .modal-head h3 { font-size: 13.5px; }
+#campaign-view .modal-body { padding: 10px 12px; gap: 8px; max-height: 76vh; }
+#campaign-view .cv-summary { font-size: 11px; padding: 6px 10px; }
+#campaign-view .cv-batch {
+  font-size: 11.5px; padding: 6px 11px; margin: 0 12px 8px; gap: 7px;
+}
+#campaign-view .cv-batch-dot { width: 7px; height: 7px; }
+#campaign-view .cv-table { font-size: 11px; }
+#campaign-view .cv-table thead th { padding: 5px 8px; font-size: 10.5px; }
+#campaign-view .cv-table td { padding: 2px 8px; }
+#campaign-view .cv-table .cv-num { width: 30px; }
+#campaign-view .cv-status { padding: 1px 7px; font-size: 10px; gap: 4px; }
+#campaign-view .cv-status::before { width: 6px; height: 6px; }
+
+/* Next-batch countdown banner inside the Campaign view. */
+.cv-batch {
+  display: flex; align-items: center; gap: 9px;
+  margin: 0 16px 10px; padding: 9px 13px; border-radius: 8px;
+  background: #fffbeb; border: 1px solid #fbbf24; color: #92400e;
+  font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums;
+}
+.cv-batch-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: #f59e0b;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+/* Live campaign table. */
+.cv-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.cv-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--blue-50); color: var(--ink-soft);
+  text-align: left; font-weight: 650; white-space: nowrap;
+  padding: 8px 10px; border-bottom: 1px solid var(--line);
+}
+.cv-table td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.cv-table tbody tr:hover { background: var(--blue-50); }
+.cv-table .cv-num { color: var(--ink-mute); width: 34px; }
+.cv-table .cv-user { font-weight: 600; color: var(--ink); }
+.cv-table .cv-mono { font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+.cv-table .cv-time { color: var(--ink-mute); white-space: nowrap; }
+
+/* Status pill per row. */
+.cv-status {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 650;
+  white-space: nowrap;
+}
+.cv-status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.cv-status.pending    { background: #f1f5f9; color: #64748b; }
+.cv-status.processing { background: #fffbeb; color: #b45309; }
+.cv-status.processing::before { animation: pulse 1s ease-in-out infinite; }
+.cv-status.sent       { background: #f0fdf4; color: #15803d; }
+.cv-status.staged     { background: #eff6ff; color: #1d4ed8; }
+.cv-status.opened     { background: #eff6ff; color: #2563eb; }
+.cv-status.failed     { background: #fef2f2; color: #b91c1c; }
+
+/* Per-account tabs in the Campaign view — each shows that account's list. */
+/* Left/right padding matches the summary + table below, so the first account
+   tab isn't glued to the panel's left edge. */
+.cv-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 2px; }
+.cv-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--white); font: inherit; font-size: 12px; font-weight: 600;
+  color: var(--ink-soft); cursor: pointer; transition: all .12s;
+}
+.cv-tab:hover { border-color: var(--blue-300); background: var(--blue-50); }
+.cv-tab.on { background: var(--blue-600); border-color: var(--blue-600); color: #fff; }
+.cv-tab-count { font-size: 10.5px; font-weight: 700; opacity: .8; }
+.cv-tab-pause { font-size: 11px; }
+
+/* Batch colours — each batch's rows share a hue; consecutive batches differ, so
+   the split is visible at a glance. --cvb is set per class below. */
+.cv-b1 { --cvb: #2563eb; } .cv-b2 { --cvb: #16a34a; } .cv-b3 { --cvb: #d97706; }
+.cv-b4 { --cvb: #7c3aed; } .cv-b5 { --cvb: #db2777; } .cv-b6 { --cvb: #0d9488; }
+.cv-b7 { --cvb: #ea580c; } .cv-b8 { --cvb: #4f46e5; }
+.cv-table tbody tr:is(.cv-b1,.cv-b2,.cv-b3,.cv-b4,.cv-b5,.cv-b6,.cv-b7,.cv-b8) {
+  background: color-mix(in srgb, var(--cvb) 8%, transparent);
+}
+.cv-table tbody tr:is(.cv-b1,.cv-b2,.cv-b3,.cv-b4,.cv-b5,.cv-b6,.cv-b7,.cv-b8) td:first-child {
+  border-left: 3px solid var(--cvb);
+}
+/* the Batch-column pill, coloured to match its batch */
+.cv-batch-tag {
+  display: inline-block; padding: 0 7px; border-radius: 6px;
+  font-weight: 700; font-size: 10.5px; background: #eef2f7; color: var(--ink-mute);
+}
+.cv-batch-tag:is(.cv-b1,.cv-b2,.cv-b3,.cv-b4,.cv-b5,.cv-b6,.cv-b7,.cv-b8) {
+  background: color-mix(in srgb, var(--cvb) 16%, white); color: var(--cvb);
+}
+/* the row being processed right now — the app's navy, a soft frosted tint that
+   wins over the batch colour + hover */
+.cv-table tbody tr.cv-row-processing > td {
+  background: color-mix(in srgb, var(--blue-700) 22%, transparent);
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  color: var(--blue-700); font-weight: 600;
+}
+.cv-table tbody tr.cv-row-processing > td:first-child { box-shadow: inset 3px 0 0 var(--blue-700); }
+.cv-table tbody tr.cv-row-processing .cv-user { color: var(--blue-700); }
+
+/* interleaved Action rows — a random Actions-panel action run between messages */
+.cv-table tbody tr.cv-action-row > td {
+  background: color-mix(in srgb, #7c3aed 9%, white);
+  border-top: 1px dashed color-mix(in srgb, #7c3aed 40%, white);
+  border-bottom: 1px dashed color-mix(in srgb, #7c3aed 40%, white);
+}
+.cv-table tbody tr.cv-action-row .cv-num { color: #7c3aed; }
+.cv-table tbody tr.cv-action-row .cv-action-cell {
+  font-weight: 700; color: #6d28d9; letter-spacing: .01em;
+}
+.cv-table tbody tr.cv-action-failed > td { background: #fef2f2; }
+.cv-table tbody tr.cv-action-failed .cv-num,
+.cv-table tbody tr.cv-action-failed .cv-action-cell { color: #b91c1c; }
+/* planned-but-not-yet-run action row — muted, dashed, shown from the start */
+.cv-table tbody tr.cv-action-pending > td {
+  background: color-mix(in srgb, #7c3aed 5%, white);
+  border-top-style: dashed; border-bottom-style: dashed;
+}
+.cv-table tbody tr.cv-action-pending .cv-num { color: #a78bda; }
+.cv-table tbody tr.cv-action-pending .cv-action-cell { color: #8b7bb8; font-weight: 600; }
+
+/* ── Setup Campaign wizard ─────────────────────────────────────── */
+/* Width goes on the dialog itself — .modal sets width and the box just fills it,
+   so sizing .wiz-box alone was capped at the 560px dialog. */
+.modal-wizard { width: min(1160px, calc(100vw - 32px)); }
+.wiz-box { width: 100%; }
+.wiz-steps { display: flex; gap: 4px; list-style: none; margin: 0; padding: 12px 0 2px; }
+.wiz-step {
+  flex: 1 1 0; display: flex; align-items: center; gap: 6px; justify-content: center;
+  font-size: 12px; font-weight: 600; color: var(--ink-mute); cursor: pointer;
+  padding: 6px 4px; border-bottom: 2px solid var(--line); white-space: nowrap;
+}
+.wiz-step b {
+  width: 20px; height: 20px; border-radius: 50%; display: inline-flex; flex: none;
+  align-items: center; justify-content: center; font-size: 11px;
+  background: var(--blue-50); color: var(--ink-mute); border: 1px solid var(--line);
+}
+.wiz-step.on { color: var(--blue-700); border-bottom-color: var(--blue-500); }
+.wiz-step.on b { background: var(--blue-600); color: #fff; border-color: var(--blue-600); }
+/* the active step: a blue shade so the current tab clearly stands out */
+.wiz-step.current {
+  border-bottom-width: 3px; border-bottom-color: var(--blue-600);
+  background: var(--blue-50); border-radius: 8px 8px 0 0; color: var(--blue-700);
+}
+/* 5-step progress stepper in the Campaign Planner header — circles 1..5 joined by
+   lines; nodes/lines up to the current step fill blue as you advance. */
+/* centred in the header, spanning a wide track */
+#panel-campaign .panel-head { position: relative; }
+.wiz-progress {
+  display: inline-flex; align-items: center;
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+}
+.wp-node {
+  width: 30px; height: 30px; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 400; color: var(--blue-400);
+  border: 1px solid var(--blue-200); background: transparent; transition: all .2s;
+}
+.wp-node.on { background: var(--blue-600); border-color: var(--blue-600); color: #fff; }
+.wp-node.current { box-shadow: 0 0 0 3px var(--blue-100); }
+.wp-line { width: 62px; height: 1px; flex: none; background: var(--blue-200); transition: background .2s; }
+.wp-line.on { background: var(--blue-600); }
+/* circled ⓘ on each step — click shows a small "what to do" panel */
+.wiz-info {
+  flex: none; width: 15px; height: 15px; border-radius: 50%; padding: 0;
+  border: 1px solid currentColor; background: none; color: inherit; cursor: pointer;
+  font-family: Georgia, "Times New Roman", serif; font-size: 10px; font-style: italic; font-weight: 700;
+  line-height: 1; display: inline-flex; align-items: center; justify-content: center; opacity: .55;
+}
+.wiz-info:hover { opacity: 1; background: var(--blue-100); }
+.wiz-info-pop {
+  position: fixed; z-index: 60; max-width: 300px; pointer-events: none;
+  background: var(--white); color: var(--ink-soft); font-size: 12px; line-height: 1.5;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .16);
+}
+.wiz-info-pop[hidden] { display: none; }
+/* FIXED height so switching steps never resizes the dialog. Overflow scrolls a
+   taller step in place. */
+.wiz-body { height: 390px; overflow-y: auto; }
+.wiz-pane { display: none; flex-direction: column; gap: 7px; }
+.wiz-pane.on { display: flex; }
+.wiz-pane textarea#setup-message { min-height: 70px; width: 100%; resize: vertical; }
+.wiz-src { padding: 2px 0; }
+/* Step 5 — a centred checklist in blue, each line led by a blue tick. No red/green;
+   items still to do are simply dimmed. */
+.wiz-pane.on[data-pane="5"] { height: 100%; justify-content: center; align-items: center; gap: 16px; }
+.wiz-pane[data-pane="5"] .cfg-sec-k { text-align: center; }
+.wiz-checklist { display: flex; flex-direction: column; gap: 12px; width: min(430px, 100%); }
+.wiz-check { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; }
+.wiz-check-label { flex: 1 1 auto; color: var(--blue-700); }
+/* small step number + the tick/cross, grouped on the RIGHT of each line */
+.wiz-check-step { flex: none; min-width: 52px; text-align: left; font-size: 10.5px; font-weight: 600; color: var(--ink-mute); white-space: nowrap; }
+.wiz-check-mark {
+  flex: none; width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 800; line-height: 1;
+}
+/* checking… — a spinning circle before the result resolves */
+.wiz-check.loading .wiz-check-label { color: var(--ink-soft); }
+.wiz-check-spin {
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 2px solid var(--blue-100); border-top-color: var(--blue-500);
+  animation: wiz-spin .7s linear infinite;
+}
+@keyframes wiz-spin { to { transform: rotate(360deg); } }
+/* resolved: done = blue tick, todo = red cross */
+.wiz-check.done .wiz-check-label { color: var(--blue-700); }
+.wiz-check.done .wiz-check-mark { color: var(--blue-600); }
+.wiz-check.todo .wiz-check-label { color: var(--bad); }
+.wiz-check.todo .wiz-check-mark { color: var(--bad); }
+.wiz-check-final { font-size: 13px; color: var(--blue-600); text-align: center; }
+.wiz-check-final[hidden] { display: none; }
+/* the gated Start button — extra gap above it, away from the checklist */
+.wiz-pane[data-pane="5"] #btn-setup-start { min-width: 260px; margin-top: 26px; position: relative; }
+/* a thin divider line just above the Start Campaign button */
+.wiz-pane[data-pane="5"] #btn-setup-start::before {
+  content: ""; position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
+  width: min(430px, 80vw); height: 1px; background: var(--line);
+}
+#btn-setup-start:disabled { opacity: .5; cursor: not-allowed; }
+/* Users step: MinIO source and Upload side by side, + a preview of the names. */
+.wiz-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.wiz-col {
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; background: var(--white);
+}
+.wiz-col .row { flex-wrap: wrap; }
+.wiz-preview {
+  display: flex; flex-wrap: wrap; gap: 5px; align-content: flex-start;
+  max-height: 120px; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--white);
+}
+.wiz-preview:empty { display: none; }
+.wiz-preview .chip { font-size: 11px; }
+/* Users step: fills height; empty = big upload icon, loaded = chips + range. */
+.wiz-pane.on[data-pane="2"] { height: 100%; }
+.setup-range-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Users step: range sits inline in the header row, compact */
+.wiz-users-head { flex-wrap: nowrap; }
+.wiz-users-head .setup-range-row { margin-left: auto; gap: 6px; }
+.wiz-users-head .setup-range-row .hint { font-size: 10.5px; white-space: nowrap; }
+.wiz-users-head .range-field { font-size: 11px; gap: 3px; }
+.wiz-users-head .range-in { flex: 0 0 72px; width: 72px; padding: 3px 7px; font-size: 11.5px; }
+/* the handles view's row filter, moved onto the Database row — small, and it
+   overrides the base input rule (flex:1, min-width:180px) so it stays compact */
+.wiz-users-head .wiz-users-search {
+  flex: 0 1 190px; min-width: 0; width: auto;
+  padding: 3px 9px; font-size: 11.5px; border-radius: 7px;
+}
+/* "Used: …" selector on the Database row */
+.wiz-users-head .wiz-users-used {
+  flex: 0 0 auto; min-width: 0; width: auto;
+  padding: 3px 8px; font-size: 11.5px; border-radius: 7px;
+  border: 1px solid var(--line); background: var(--white); color: var(--ink); cursor: pointer;
+}
+.wiz-users-box {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  display: flex; flex-wrap: wrap; gap: 5px; align-content: flex-start;
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--white);
+}
+.wiz-users-box .chip { font-size: 11px; }
+/* When the handles view is mounted in the Users step, drop the chip
+   flex-wrap layout and let the two-column view fill the box (its own panes
+   scroll, not the box). */
+.wiz-users-box:has(.data-cat-layout) {
+  display: block; padding: 0; border: 0; overflow: hidden; background: transparent;
+}
+.wiz-users-box .data-cat-layout { height: 100%; align-items: stretch; }
+.wiz-users-box .data-cat-main,
+.wiz-users-box .data-cat-side { display: flex; flex-direction: column; min-height: 0; }
+.wiz-users-box .data-cat-wrap { max-height: none; flex: 1 1 auto; }
+/* the view's own count line is redundant in the wizard — the "N user(s)
+   selected" banner below the box already says it — so drop it and hand the
+   table that space */
+.wiz-users-box .data-cat-count { display: none; }
+
+/* ── Accordion side panel (Users step): Filter · Used · Range ── */
+/* a compact settings column (~21%) — the filters below stack, so it needs little width */
+.data-cat-layout:has(.dcv-accordion) { grid-template-columns: minmax(0, 3.8fr) minmax(160px, 1fr); }
+.data-cat-side.dcv-accordion {
+  display: flex; flex-direction: column; min-height: 0;
+  border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
+  background: var(--white); gap: 0;
+}
+.dcv-sec { display: flex; flex-direction: column; flex: none; min-height: 0; border-bottom: 1px solid var(--line); }
+.dcv-sec:last-child { border-bottom: 0; }
+.dcv-sec-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
+  text-align: left; cursor: pointer; user-select: none; border: 0;
+  background: var(--blue-50); color: var(--ink);
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  padding: 6px 10px;
+}
+.dcv-sec-head:hover { background: var(--blue-100); }
+.dcv-chev {
+  flex: none; width: 0; height: 0;
+  border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--ink-mute); transition: transform .15s;
+}
+.dcv-sec.open .dcv-chev { transform: rotate(90deg); }   /* right when closed, down when open */
+.dcv-sec-body { display: none; padding: 8px 10px; }
+.dcv-sec.open .dcv-sec-body { display: block; }
+
+/* Used + Range controls inside their section bodies */
+.dcv-sec-body .data-cat-search { margin-bottom: 0; }
+.dcv-sec-body .hint { display: block; margin-top: 5px; font-size: 10px; line-height: 1.35; }
+.cat-used-row { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; font-size: 11.5px; color: var(--ink); }
+.cat-used-row .cat-used-on { flex: none; width: 14px; height: 14px; min-width: 0; margin: 0; accent-color: var(--blue-600); }
+.cat-used-row .cat-used-n {
+  width: 52px; min-width: 0; padding: 2px 5px; font-size: 11.5px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--white); color: var(--ink);
+}
+.cat-range { display: flex; flex-direction: column; gap: 6px; }
+.cat-range-inputs { display: flex; gap: 6px; }
+.cat-range-inputs label { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--ink-mute); }
+.cat-range-inputs input {
+  flex: 1 1 0; min-width: 0; width: auto; padding: 3px 6px; font-size: 11.5px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--white); color: var(--ink);
+}
+
+/* Categories body: All / None inline in FRONT of the category search */
+.cat-list-top { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.cat-list-top .data-cat-side-actions { flex: none; }
+.cat-list-top .data-cat-list-search { flex: 1 1 auto; min-width: 0; margin: 0; }
+
+/* the global Apply button — a primary footer pinned to the bottom of the panel
+   (margin-top:auto keeps it at the bottom even when every section is collapsed) */
+.dcv-apply {
+  flex: none; width: 100%; margin-top: auto; border: 0; border-top: 1px solid var(--blue-700);
+  background: var(--blue-600); color: #fff; cursor: pointer;
+  font-size: 11px; font-weight: 700; padding: 8px 10px;
+}
+.dcv-apply:hover { background: var(--blue-700); }
+
+/* Smaller type throughout the settings panel (scoped to the accordion, so the
+   Data panel's categorized view keeps its own sizes). */
+.dcv-accordion { font-size: 10px; }
+.dcv-accordion .dcv-sec-head { font-size: 9.5px; }
+.dcv-accordion .data-cat-item { font-size: 10px; }
+.dcv-accordion .data-cat-item .dc-n { font-size: 8.5px; }
+.dcv-accordion .data-cat-search,
+.dcv-accordion .data-cat-list-search,
+.dcv-accordion .cat-used-row,
+.dcv-accordion .cat-used-row .cat-used-n,
+.dcv-accordion .cat-range-inputs input,
+.dcv-accordion .cat-range-inputs label { font-size: 10px; }
+.dcv-accordion .dcv-sec-body .hint { font-size: 9px; }
+
+/* In the wizard, the Categories section fills the remaining height and its list
+   scrolls ONLY when open; collapsed it stays a short row and Apply drops to the
+   bottom. The other filter rows stay auto. */
+.wiz-users-box .data-cat-side.dcv-accordion { height: 100%; }
+.wiz-users-box .dcv-sec[data-sec="categories"].open { flex: 1 1 auto; min-height: 0; }
+.wiz-users-box .dcv-sec[data-sec="categories"].open > .dcv-sec-body {
+  display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto;
+}
+.wiz-users-box .dcv-sec[data-sec="categories"] .data-cat-list { flex: 1 1 auto; min-height: 0; }
+.wiz-users-box .data-cat-list { max-height: none; flex: 1 1 auto; }
+/* the "N user(s) selected" note: slim, minimal vertical footprint */
+#setup-users-note { padding: 3px 10px; font-size: 11px; line-height: 1.4; margin-top: -2px; }
+/* Messages step: SMS 75% left, media 25% right — the SMS column fills down to
+   the footer (textarea grows). */
+.wiz-pane.on[data-pane="3"] { height: 100%; }
+.wiz-msg-cols {
+  display: grid; grid-template-columns: 3fr 1fr; gap: 14px; align-items: stretch;
+  flex: 1 1 auto; min-height: 0;
+}
+.wiz-msg-main, .wiz-msg-side { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.wiz-msg-main { min-height: 0; }
+.wiz-msg-main #setup-message { flex: 1 1 auto; min-height: 70px; }   /* grow to the footer */
+.wiz-msg-side { align-self: start; }                                 /* media stays at top */
+.wiz-msg-side .wiz-media-preview { max-height: 150px; }
+/* section header row: label + small From-storage / upload buttons */
+.wiz-sec-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wiz-sec-row .cfg-sec-k { margin: 0; }
+.btn-xs { padding: 2px 8px; font-size: 10.5px; border-radius: 6px; line-height: 1.5; }
+/* db.png icon inside the Database buttons / hints */
+.db-ico { width: 14px; height: 14px; vertical-align: -2px; object-fit: contain; }
+/* add-user.png — a large icon centred as a faint BACKGROUND watermark in the
+   Login step; the account rows (data) render on top of it. */
+.wiz-pane[data-pane="1"] { position: relative; }
+.add-user-bg {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 130px; height: 130px; object-fit: contain;
+  opacity: .22; filter: brightness(.35);            /* darker watermark */
+  pointer-events: none; user-select: none; z-index: 0;
+}
+/* the intro line, centred as a caption just under the watermark icon */
+.add-user-note {
+  position: absolute; top: calc(50% + 80px); left: 50%; transform: translateX(-50%);
+  margin: 0; width: 250px; text-align: center;
+  font-size: 11px; line-height: 1.4; color: var(--ink-mute);
+  pointer-events: none; user-select: none; z-index: 0;
+}
+/* everything else in the Login step sits above the watermark */
+.wiz-pane[data-pane="1"] > :not(.add-user-bg):not(.add-user-note) { position: relative; z-index: 1; }
+.btn-xs.on .db-ico { filter: brightness(0) invert(1); }   /* white on the active blue button */
+.wiz-upload-mini {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 26px; height: 22px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--white);
+}
+.wiz-upload-mini:hover { border-color: var(--blue-400); background: var(--blue-50); }
+
+/* Messages step: sms draft tabs on top, the editor fills down to the footer.
+   Drop the panel's 48px bottom padding (that was room for a floating Start). */
+.wiz-pane.on[data-pane="3"] { height: 100%; }
+.wiz-pane[data-pane="3"] #setup-sms-tabs { flex: none; gap: 4px; }
+/* smaller draft tabs in the wizard: compact padding + font */
+#setup-sms-tabs .sms-tab { padding: 2px 7px; font-size: 10px; gap: 3px; border-radius: 6px 6px 0 0; }
+#setup-sms-tabs .sms-tab .sms-edit { font-size: 10px; }
+#setup-sms-tabs .sms-add { padding: 2px 7px; font-size: 12px; }
+#setup-sms-tabs .sms-save { padding: 3px 6px; }
+.wiz-pane[data-pane="3"] #setup-message { flex: 1 1 auto; min-height: 90px; padding: 9px 11px; }
+/* messages greyed out while "Skip messages" is on */
+.wiz-pane[data-pane="3"] .is-skipped { opacity: .4; pointer-events: none; }
+/* Media is its own step (4), wrapped in a bordered boundary box. */
+.wiz-media-box { border: 1px solid var(--line); border-radius: 9px; padding: 10px; background: var(--white); }
+.wiz-pane.on[data-pane="4"].wiz-media-box { height: 100%; }
+.wiz-media-box .wiz-media-preview {
+  flex: 1 1 auto; min-height: 0; max-height: none; align-content: flex-start; margin-top: 2px;
+}
+/* empty state: a big icon with an Upload button, centred in the MIDDLE of the box.
+   Fills the whole box (flex-basis 100% + min-height 100%) so justify-content can
+   push the icon/text to the vertical centre — margin:auto only centred it
+   horizontally, leaving it stuck near the top of the flex-wrap box. */
+.wiz-media-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; color: var(--ink-mute); text-align: center;
+  flex: 1 1 100%; width: 100%; min-height: 100%;
+}
+.wiz-media-icon { font-size: 60px; line-height: 1; opacity: .85; }
+.wiz-upload-big { width: 60px; height: 60px; object-fit: contain; cursor: pointer; opacity: .9; transition: transform .12s, opacity .12s; }
+.wiz-upload-big:hover { opacity: 1; transform: translateY(-2px); }
+/* active 🗄️ Database button (data is loaded; click again to clear) */
+.btn-xs.on { background: var(--blue-600); border-color: var(--blue-600); color: #fff; }
+/* Skip toggle, right-aligned in the section header. */
+.wiz-skip { display: inline-flex; align-items: center; gap: 5px; margin-left: auto;
+  font-size: 11px; color: var(--ink-soft); cursor: pointer; white-space: nowrap; }
+.wiz-skip input { width: 13px; height: 13px; min-width: 0; accent-color: var(--blue-600); margin: 0; }
+/* Media preview — a small strip of thumbnails; click to attach (blue ring). */
+.wiz-media-preview {
+  display: flex; flex-wrap: wrap; gap: 7px; align-items: flex-start;
+  max-height: 84px; overflow-y: auto; padding: 2px;
+}
+.wiz-thumb {
+  position: relative; width: 60px; height: 60px; border-radius: 7px; overflow: hidden;
+  border: 2px solid var(--line); background: var(--blue-50); flex: none; cursor: pointer;
+}
+.wiz-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wiz-thumb .m-cap {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 1px 3px;
+  font-size: 8.5px; line-height: 1.2; color: #fff; background: rgba(0,0,0,.55);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wiz-thumb.on { border-color: var(--blue-600); box-shadow: 0 0 0 2px var(--blue-200); }
+.wiz-thumb.on::after {
+  content: "✓"; position: absolute; top: 1px; right: 2px; font-size: 11px; font-weight: 700;
+  color: #fff; background: var(--blue-600); border-radius: 50%; width: 15px; height: 15px;
+  line-height: 15px; text-align: center;
+}
+.wiz-saved { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.wiz-saved .chip { font-size: 11px; cursor: pointer; }
+.wiz-saved label.chip { display: inline-flex; align-items: center; gap: 5px; }
+/* Slimmer wizard footer (.modal-wizard beats the later .modal-foot padding). */
+.modal-wizard .wiz-foot { display: flex; gap: 8px; justify-content: space-between; padding: 6px 16px; }
+.modal-wizard .wiz-foot .btn { padding: 5px 14px; font-size: 12.5px; }
+
+/* ── Setup Campaign rendered INLINE as the Campaign panel body (not a modal).
+   app.js moves #campaign-setup into #panel-campaign and opens it non-modally;
+   these rules undo the .modal/.modal-wizard fixed-centre popup styling. Placed
+   after those rules so equal-specificity ties resolve here. */
+.wiz-inline {
+  position: static; top: auto; left: auto; transform: none;
+  width: 100%; max-width: none; border-radius: 0;
+  background: transparent; box-shadow: none;
+  flex: 1; min-height: 0; display: flex;
+}
+.wiz-inline .wiz-box { flex: 1; min-height: 0; display: flex; flex-direction: column; width: 100%; }
+.wiz-inline .modal-head { display: none; }             /* the panel head already labels this */
+.wiz-inline .wiz-steps { padding-top: 0; }
+.wiz-inline .wiz-body { height: auto; flex: 1 1 auto; min-height: 0; }
+.wiz-inline .wiz-foot { justify-content: flex-start; padding: 8px 0 0; }
+.wiz-inline #btn-campaign-open-view { margin-left: auto; }   /* push view + Next to the right */
+
+/* Login step fills the body so the buttons pin to the bottom. */
+.wiz-pane.on[data-pane="1"] { height: 100%; }
+.wiz-pane[data-pane="1"] #setup-accounts { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+/* bottom bar: + Add account on the LEFT, 🚀 Log in all on the RIGHT. */
+.setup-login-foot {
+  display: flex; align-items: center; gap: 10px; margin-top: 8px;
+  padding-top: 8px;
+}
+.setup-login-foot #setup-login-note { margin-left: auto; }   /* buttons hug the left; note to the right */
+
+/* Multiple accounts in login — one compact row each, small fonts. */
+.setup-acct-head {
+  display: grid; grid-template-columns: 1.1fr 2fr 1.5fr 1.1fr; gap: 6px; padding: 0 2px;
+  font-size: 9px; text-transform: uppercase; letter-spacing: .03em; color: var(--ink-mute);
+}
+.setup-acct-row {
+  display: grid; grid-template-columns: 1.1fr 2fr 1.5fr auto auto minmax(78px, 1fr) auto;
+  gap: 6px; align-items: center; margin-bottom: 5px;
+}
+.setup-acct-row .mini {
+  width: 100%; min-width: 0; height: 28px; padding: 3px 7px; font-size: 11.5px;
+  border: 1px solid var(--line); border-radius: 6px;
+}
+.setup-acct-row .acct-login-btn { padding: 3px 10px; font-size: 11px; }
+.setup-acct-row .acct-status { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-acct-row .acct-remove { font-size: 12px; padding: 0 5px; color: var(--ink-mute); }
+.setup-acct-row .acct-remove:hover { color: var(--danger, #b91c1c); }
+.setup-acct-row .acct-close { font-size: 13px; padding: 0 5px; color: var(--ink-mute); }
+.setup-acct-row .acct-close:hover { color: var(--danger, #b91c1c); }
+
+/* Blue header for the wizard. */
+.modal-wizard .modal-head {
+  background: var(--blue-600); border-radius: 12px 12px 0 0; border-bottom: none; padding: 11px 16px;
+}
+.modal-wizard .modal-head h3 { color: #fff; }
+.modal-wizard .modal-head .icon-btn { color: #fff; background: transparent; border-color: transparent; }
+.modal-wizard .modal-head .icon-btn:hover { background: rgba(255,255,255,.22); }
+
+.modal-box { display: flex; flex-direction: column; }
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 13px 16px; border-bottom: 1px solid var(--line);
+}
+.modal-head h3 { font-size: 15px; color: var(--blue-700); }
+/* Range picker inside the Full-preview modal. */
+.range-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--blue-50);
+}
+.range-field { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--ink-soft); }
+.range-in {
+  flex: 0 0 66px; width: 66px; min-width: 0;
+  padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px;
+  font: inherit; font-size: 12.5px;
+}
+.range-in:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 1px; }
+.range-bar #range-count { margin-left: auto; }
+.modal-body {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px; max-height: 70vh; overflow-y: auto;
+}
+/* Rows outside the chosen range: visibly excluded from the next run. */
+.name-li.out-of-range { opacity: .38; }
+.name-li.out-of-range .name-chip { text-decoration: line-through; }
+.modal-foot {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 12px 16px; border-top: 1px solid var(--line); background: var(--blue-50);
+  border-radius: 0 0 12px 12px;
+}
+.modal-foot .hint { margin-left: auto; }
+
+/* Multi-account picker (Scrapping + Campaign): one tickable chip per open
+   window, so the job can fan out across several accounts at once. Each chip is
+   a plain toggle button — no native checkbox circle; the selected state is the
+   filled pill with a leading ✓, which reads cleaner in a row of them. */
+.scrap-pick-head,
+.acct-pick-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.chip-picker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+/* Scrapping: label + Select all + account chips on the left, and the
+   settings/summary/Scrapping controls pinned to the right — all one row. */
+.scrap-pick-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 8px; }
+.scrap-pick-row .scrap-acct-label { font-size: 12px; flex: none; }
+.scrap-pick-row .scrap-all-btn { padding: 3px 9px; font-size: 11.5px; flex: none; }
+.scrap-pick-row #scrap-accounts { flex: 1 1 auto; min-width: 0; }
+.scrap-pick-row .scrap-controls {
+  flex: none; margin-left: auto; display: flex; align-items: center; gap: 8px;
+}
+/* 🎯 target-count control: stop each account after this many usernames */
+.scrap-target-lbl {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
+  color: var(--ink-soft); white-space: nowrap;
+}
+.scrap-target-lbl input {
+  width: 74px; padding: 4px 6px; font: inherit; font-size: 12px;
+  border: 1px solid var(--line); border-radius: 7px; text-align: right;
+}
+.scrap-target-lbl .hint { font-size: 11px; }
+
+/* ⚙️ + its summary + 🎯, lifted into the panel head (left of >_). The head bar is
+   fixed-height and must not grow, so the summary is the one thing allowed to
+   shrink — it ellipsises rather than pushing the target box off the end. */
+/* flex:0 1 auto (not the base `flex:none`) so the cluster CAN shrink — without it
+   the summary has nothing to give and the row overflows instead of ellipsising. */
+#panel-scrapping .head-tools { flex: 0 1 auto; min-width: 0; }
+#panel-scrapping .head-tools .scrap-summary {
+  flex: 0 1 auto; min-width: 0; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+#panel-scrapping .head-tools .scrap-target-lbl { flex: none; }
+/* flex/min-width reset the global `input { flex:1; min-width:180px }`, which would
+   otherwise stretch this box to 180px and shove the summary out of the bar. */
+#panel-scrapping .head-tools .scrap-target-lbl input {
+  flex: none; width: 62px; min-width: 0; padding: 3px 6px; background: var(--white);
+}
+.chip-picker.chip-sm { gap: 6px; align-items: flex-start; }
+.chip-picker.chip-sm .acct-chip { padding: 3px 9px; font-size: 11.5px; border-radius: 8px; gap: 4px; border-width: 1px; }
+.chip-picker.chip-sm .acct-chip.on::before { font-size: 11px; }
+
+/* Each Scrapping account is a small card: name-toggle on top, a 3-way technique
+   selector (Scroll / Search / Both) beneath — the method it collects with. */
+.scrap-acct-pick {
+  display: flex; flex-direction: column; gap: 4px; align-items: stretch;
+  padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--white);
+}
+.scrap-acct-pick.on { border-color: var(--blue-300); background: var(--blue-50); }
+.scrap-acct-pick .acct-chip { justify-content: center; }
+/* segmented Scroll/Search/Both control */
+.tech-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--white); }
+.tech-opt {
+  flex: 1 1 auto; padding: 2px 8px; font: inherit; font-size: 10px; font-weight: 700;
+  color: var(--ink-mute); background: transparent; border: 0; cursor: pointer; line-height: 1.7;
+  letter-spacing: .02em;
+}
+.tech-opt + .tech-opt { border-left: 1px solid var(--line); }
+.tech-opt:hover { background: var(--blue-50); color: var(--blue-700); }
+.tech-opt.on { background: var(--blue-600); color: #fff; }
+/* technique badge in a running column's header */
+.scrap-acct-head .tech-tag {
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  color: var(--blue-700); background: var(--blue-100); border-radius: 5px; padding: 1px 5px;
+}
+
+/* Scrapping: the found-names area is the main event — give it room. When a run
+   starts it splits into one scrollable COLUMN per account (laid out from however
+   many accounts are running); with many accounts the row scrolls sideways. */
+#scrap-list {
+  min-height: 340px; max-height: 62vh; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 8px; padding: 9px; background: var(--white);
+}
+#scrap-list:has(.scrap-acct) {
+  display: flex; flex-direction: row; gap: 10px; align-items: stretch;
+  overflow-x: auto; overflow-y: hidden;
+}
+.acct-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 13px; border: 1.5px solid var(--line); border-radius: 10px;
+  background: var(--white); font: inherit; font-size: 13px; font-weight: 500;
+  color: var(--ink-soft); line-height: 1.2;
+  cursor: pointer; user-select: none; transition: all .12s;
+}
+.acct-chip:hover { border-color: var(--blue-300); background: var(--blue-50); }
+.acct-chip:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 1px; }
+/* ✓ marker only shows once selected, so the unselected row stays box-free. */
+.acct-chip.on {
+  background: var(--blue-600); border-color: var(--blue-600); color: #fff; font-weight: 600;
+}
+.acct-chip.on::before { content: '✓'; font-weight: 800; font-size: 12px; }
+.acct-chip.running { background: #fffbeb; border-color: #fbbf24; color: #92400e; }
+.acct-chip.done    { background: #f0fdf4; border-color: #86efac; color: #166534; }
+.acct-chip.failed  { background: #fef2f2; border-color: #fca5a5; color: #991b1b; }
+
+/* ── Campaign: 3-column dashboard ──────────────────────────────
+   Left  = the username queue (full height).
+   Mid   = SMS tabs + message + Start, with the account picker beneath it.
+   Right = Upload button + media preview, full height. */
+/* the inline campaign sections are kept for their wiring, but hidden — the
+   Setup Campaign pop-up is the flow now. ([hidden] alone loses to display:grid) */
+.campaign-layout[hidden] { display: none; }
+/* Launcher card: centred call-to-action that opens the Setup Campaign pop-up. */
+.campaign-launch { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.campaign-launch-card {
+  display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center;
+  max-width: 480px; padding: 34px 30px; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--white); box-shadow: 0 6px 22px rgba(15, 23, 42, .06);
+}
+.campaign-launch-icon { font-size: 46px; line-height: 1; }
+.campaign-launch-card h3 { font-size: 18px; color: var(--blue-700); margin: 0; }
+.campaign-launch-card .hint { font-size: 13px; line-height: 1.55; color: var(--ink-soft); }
+.campaign-launch-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
+.campaign-launch-actions .btn-primary { font-size: 14px; padding: 9px 18px; }
+.campaign-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 230px);
+  grid-template-areas:
+    "sms      side"
+    "accounts side";
+  /* The layout fills the panel exactly — it never sizes to its contents. The
+     top row takes whatever is left, the accounts row is its own content height,
+     so every box keeps a fixed position no matter how long the username list
+     gets. Overflow lives inside the list / preview / chips, never out here. */
+  grid-template-rows: minmax(0, 1fr) auto;
+  flex: 1; min-height: 0;
+  gap: 10px;
+  align-items: stretch;
+}
+.cl-list     { grid-area: list; min-width: 0; min-height: 0; }
+.cl-sms      { grid-area: sms; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; position: relative; }
+.cl-side     { grid-area: side; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+/* Accounts: the label + select-all + chips sit top-left; Close browser is
+   pinned to the bottom-right corner of the section. */
+.cl-accounts {
+  grid-area: accounts; min-width: 0; min-height: 100px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+}
+/* This row is auto-sized, so anything that can wrap in here would push the SMS
+   box around as accounts come and go. Cap the chips at ~2 rows and scroll the
+   rest, which pins the row to one predictable height. */
+.cl-accounts .acct-top .chip-picker { max-height: 52px; overflow-y: auto; }
+/* What-to-send mode, on its own row above the account chips. */
+.cl-mode-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.cl-mode-row .seg { flex: none; }
+.cl-mode-row #campaign-mode-hint { flex: 1 1 140px; min-width: 0; }
+.cl-accounts .acct-top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.cl-accounts .acct-label { flex: none; }
+.cl-accounts .acct-top .chip-picker { flex: 1 1 auto; min-width: 0; }
+/* Campaign view + Close browser sit together in the bottom-right corner, with
+   Campaign view to the LEFT of Close browser. */
+.cl-accounts .cl-close-row {
+  display: flex; align-items: center; gap: 8px;
+  align-self: flex-end; margin-top: auto;
+}
+
+/* Numbered account chips, each in its own light colour (campaign panel only).
+   A hue is assigned per position and cycled every 8; the chip, its border and
+   its number badge are all light tints of that hue, deepening a little when
+   selected so the pick still reads clearly. */
+.cl-accounts .acct-chip {
+  --hue: 210;
+  background: hsl(var(--hue) 72% 96%);
+  border-color: hsl(var(--hue) 58% 82%);
+  color: hsl(var(--hue) 45% 36%);
+}
+.cl-accounts .acct-chip:hover { border-color: hsl(var(--hue) 62% 66%); }
+.cl-accounts .acct-chip.on::before { content: none; }        /* number leads instead */
+.cl-accounts .acct-chip.on {
+  background: hsl(var(--hue) 78% 90%);
+  border-color: hsl(var(--hue) 64% 58%);
+  color: hsl(var(--hue) 52% 28%); font-weight: 600;
+}
+/* Selected accounts carry a trailing ✓ tick, in the account's own hue. */
+.cl-accounts .acct-chip.on::after { content: '✓'; font-weight: 800; font-size: 12px; }
+.cl-accounts .acct-chip:nth-child(8n+1) { --hue: 210; }   /* blue     */
+.cl-accounts .acct-chip:nth-child(8n+2) { --hue: 150; }   /* green    */
+.cl-accounts .acct-chip:nth-child(8n+3) { --hue: 275; }   /* purple   */
+.cl-accounts .acct-chip:nth-child(8n+4) { --hue: 28;  }   /* orange   */
+.cl-accounts .acct-chip:nth-child(8n+5) { --hue: 338; }   /* pink     */
+.cl-accounts .acct-chip:nth-child(8n+6) { --hue: 190; }   /* cyan     */
+.cl-accounts .acct-chip:nth-child(8n+7) { --hue: 50;  }   /* amber    */
+.cl-accounts .acct-chip:nth-child(8n+8) { --hue: 255; }   /* indigo   */
+
+.cl-accounts .acct-num {
+  display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: 999px; background: hsl(var(--hue) 55% 80%); color: hsl(var(--hue) 50% 28%);
+  font-size: 11px; font-weight: 700; line-height: 1;
+}
+.cl-accounts .acct-chip.on .acct-num { background: hsl(var(--hue) 58% 45%); color: #fff; }
+
+/* Run states override the per-account colour so status stays unambiguous. */
+.cl-accounts .acct-chip.running { background: #fffbeb; border-color: #fbbf24; color: #92400e; }
+.cl-accounts .acct-chip.done    { background: #f0fdf4; border-color: #86efac; color: #166534; }
+.cl-accounts .acct-chip.failed  { background: #fef2f2; border-color: #fca5a5; color: #991b1b; }
+.cl-accounts .acct-chip.running .acct-num { background: #fbbf24; color: #78350f; }
+.cl-accounts .acct-chip.done .acct-num    { background: #86efac; color: #14532d; }
+.cl-accounts .acct-chip.failed .acct-num  { background: #fca5a5; color: #7f1d1d; }
+
+/* ── Compact Campaign panel: smaller fonts + elements throughout ────── */
+#panel-campaign { font-size: 12px; }
+/* The campaign panel is a fixed dashboard, not a document: the body fills the
+   window and never scrolls itself, so every control stays exactly where it was
+   regardless of how many usernames are loaded. (The run output isn't in here to
+   size anything — buildTerminal() moves .out into the >_ drawer.) */
+/* Campaign panel has no description line — tighten the gap between the panel
+   title and the wizard's step tabs. */
+#panel-campaign .panel-body { overflow: hidden; padding-top: 8px; }
+#panel-campaign .hint,
+#panel-campaign #campaign-note,
+#panel-campaign #campaign-mode-hint { font-size: 11px; }
+#panel-campaign .cfg-k { font-size: 11px; }
+
+/* SMS draft tabs + message box */
+#panel-campaign .sms-tabs { gap: 4px; }
+#panel-campaign .sms-tab { padding: 3px 8px; font-size: 10.5px; border-radius: 6px 6px 0 0; gap: 4px; }
+#panel-campaign .sms-tab .sms-edit { font-size: 10.5px; }
+/* min-height is a floor, not a target — it has to stay small enough that the
+   column can still shrink to fit a short window instead of overflowing. */
+#panel-campaign .sms-body { font-size: 12px; min-height: 72px; padding: 8px 10px 42px; }
+#panel-campaign .sms-start { padding: 5px 12px; font-size: 12px; }
+
+/* Send [Text · Media · Both] segmented control */
+#panel-campaign .seg { padding: 1px; gap: 1px; }
+#panel-campaign .seg-b { padding: 3px 8px; font-size: 10.5px; }
+
+/* Accounts: label, Select-all, chips + number badges all smaller */
+#panel-campaign .cl-accounts .acct-chip { padding: 3px 9px; font-size: 10.5px; border-radius: 8px; gap: 5px; }
+#panel-campaign .cl-accounts .acct-num { min-width: 15px; height: 15px; font-size: 10px; }
+#panel-campaign .cl-accounts .acct-chip.on::after { font-size: 10px; }
+
+/* Buttons within the panel a touch smaller */
+#panel-campaign .btn-sm { padding: 3px 8px; font-size: 10.5px; }
+#panel-campaign .cl-close { padding: 3px 9px; font-size: 10.5px; }
+#panel-campaign .name-chip,
+#panel-campaign .assign-tag { font-size: 10.5px; }
+
+/* Panel-like framing for each region. */
+.cl-list, .cl-sms, .cl-side, .cl-accounts {
+  border: 1px solid var(--line); border-radius: 10px; background: var(--white); padding: 9px;
+}
+.cl-list { display: flex; flex-direction: column; }
+.cl-list-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 7px; }
+.cl-list-head .cfg-k { font-size: 12px; }
+.cl-list-head .icon-btn { font-size: 15px; padding: 1px 7px; line-height: 1.1; }
+.cl-list-head .icon-btn.spinning { animation: spin .6s linear; }
+.cl-list .list { flex: 1; min-height: 0; overflow: hidden; }
+/* One name per row (not the Data panel's multi-column grid) so each name gets
+   the full widened column for its "Acc n - sms n - img n" badge.
+   The three cells — number, assignment badge, name — are laid out on the LIST's
+   own grid rather than per-row, so the badge column sizes once to the widest
+   label and every username starts at the same x. Per-row flex can't do that:
+   each badge would size to its own text and "Acc 10" would shunt its name right
+   of "Acc 1"'s. That's what `display: contents` on the <li> buys. */
+.cl-list .name-list--scroll {
+  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-auto-rows: 17px; gap: 0 6px; align-items: center;
+  /* Take the leftover height of the column and scroll inside it. A max-height
+     in vh made the list grow with the name count, which stretched every other
+     box in the row and pushed the panel into a page scroll. */
+  flex: 1; min-height: 0; max-height: none;
+}
+.cl-list .name-list--scroll .name-li { display: contents; }
+#panel-campaign .name-chip { line-height: 1.2; padding: 0 6px; }
+#panel-campaign .name-num { font-size: 9px; }
+#panel-campaign .name-li { gap: 4px; }
+/* Drop the "N names loaded from Data…" status line under the layout — it just
+   ate vertical space and pushed the panel into a page scroll. */
+#panel-campaign #campaign-note { display: none; }
+/* Narrow column: heading on its own line, the two action buttons side by side. */
+.cl-list .name-count { flex-direction: column; align-items: flex-start; gap: 6px; }
+.name-count .nc-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.name-count .nc-actions .btn { margin-left: 0; }
+
+/* Middle: SMS tabs (sms1, sms2, … +) */
+.sms-tabs { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.sms-tab {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px 7px 0 0;
+  background: var(--blue-50); font: inherit; font-size: 12px; font-weight: 600;
+  color: var(--blue-700); cursor: pointer; transition: all .12s;
+}
+.sms-tab:hover { border-color: var(--blue-300); }
+.sms-tab.on { background: var(--blue-600); border-color: var(--blue-600); color: #fff; }
+.sms-tab .sms-edit {
+  border: none; background: none; color: currentColor; cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 0; opacity: .65;
+}
+.sms-tab .sms-edit:hover { opacity: 1; }
+
+/* The ✎ popover: Edit / Update / Delete for one draft. */
+.sms-menu {
+  position: fixed; z-index: 50; min-width: 132px;
+  background: var(--white); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15,23,42,.16); padding: 4px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.sms-menu[hidden] { display: none; }
+.sms-menu button {
+  display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
+  border: none; background: none; cursor: pointer; padding: 6px 9px; border-radius: 6px;
+  font: inherit; font-size: 12.5px; color: var(--ink-soft);
+}
+.sms-menu button:hover { background: var(--blue-50); color: var(--blue-700); }
+.sms-menu button.danger:hover { background: #fef2f2; color: var(--bad); }
+.sms-menu button:disabled { opacity: .45; cursor: not-allowed; }
+.sms-menu button:disabled:hover { background: none; color: var(--ink-soft); }
+.sms-add {
+  padding: 5px 10px; border: 1px dashed var(--blue-300); border-radius: 7px;
+  background: none; color: var(--blue-600); font-size: 14px; font-weight: 700;
+  cursor: pointer; line-height: 1;
+}
+.sms-add:hover { background: var(--blue-50); }
+/* Save icon lives at the far right of the tab bar. */
+.sms-save { margin-left: auto; display: inline-flex; align-items: center; padding: 4px 7px; }
+
+/* Middle: the message body — grows to fill the column. Extra bottom padding
+   leaves room for the Start button floating in the panel's corner. */
+.sms-body {
+  flex: 1; min-height: 130px; resize: none;
+  padding: 9px 11px 48px; border: 1px solid var(--line); border-radius: 8px;
+  font: inherit; font-size: 13px; line-height: 1.45; color: var(--ink);
+}
+.sms-body:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 1px; }
+/* Locked (read-only) vs editing: a saved draft reads as greyed until Edit. */
+.sms-body:read-only { background: #f6f8fb; color: var(--ink-soft); cursor: default; }
+.sms-body.editing { background: var(--white); color: var(--ink); border-color: var(--blue-400); }
+/* Start button sits inside the SMS panel, bottom-right. */
+.sms-start { position: absolute; right: 18px; bottom: 18px; z-index: 1; }
+
+/* Right: upload + preview */
+.cl-upload { justify-content: center; cursor: pointer; }
+.preview-section {
+  flex: 1; min-height: 0; overflow: auto;
+  border: 1px dashed var(--line); border-radius: 8px; padding: 7px;
+  display: flex; flex-wrap: wrap; gap: 7px; align-content: flex-start;
+}
+.preview-section .hint { width: 100%; text-align: center; margin: auto 0; opacity: .6; }
+.media-thumb {
+  position: relative; width: 62px; height: 62px; border-radius: 7px; overflow: hidden;
+  border: 1px solid var(--line); background: var(--blue-50); flex: none;
+}
+.media-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.media-thumb .m-file {
+  display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;
+  font-size: 20px;
+}
+.media-thumb .m-cap {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 1px 3px;
+  font-size: 9px; line-height: 1.2; color: #fff; background: rgba(0,0,0,.55);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.media-thumb .m-del {
+  position: absolute; top: 1px; right: 1px; width: 16px; height: 16px;
+  border: none; border-radius: 50%; background: rgba(0,0,0,.6); color: #fff;
+  font-size: 11px; line-height: 16px; text-align: center; cursor: pointer; padding: 0;
+}
+.media-thumb .m-del:hover { background: var(--bad); }
+
+/* Slimmer note + output so the panel isn't dominated by empty terminal. */
+.banner-slim { padding: 7px 11px; font-size: 12px; }
+.out-compact { max-height: 180px; padding: 10px; font-size: 12px; }
+
+/* Narrow or short webviews: there isn't enough height to hold everything at a
+   fixed position, so hand scrolling back to the panel body and re-cap the list
+   rather than crushing the boxes. Narrow also drops the columns and stacks,
+   message first. */
+@media (max-width: 720px) {
+  .campaign-layout {
+    grid-template-columns: 1fr;
+    grid-template-areas: "sms" "side" "accounts";
+  }
+}
+@media (max-width: 720px), (max-height: 600px) {
+  .campaign-layout { grid-template-rows: none; flex: none; }
+  #panel-campaign .panel-body { overflow-y: auto; }
+  .cl-list .list { overflow: visible; }
+  .cl-list .name-list--scroll { flex: none; max-height: 240px; }
+  .cl-sms, .cl-side, .cl-accounts { min-height: 0; }
+  .cl-side .preview-section { min-height: 110px; }
+  .cl-accounts .acct-top .chip-picker { max-height: none; overflow-y: visible; }
+}
+
+/* Per-account results: each account is its own full-height column with a fixed
+   header and a scrollable list of the names it found, sitting beside the others. */
+.scrap-acct {
+  flex: 1 1 0; min-width: 185px; max-width: 340px; min-height: 0;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--white);
+}
+.scrap-acct-head {
+  flex: none; font-size: 12px; font-weight: 600; color: var(--blue-700);
+  margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1px solid var(--line);
+}
+.scrap-acct-head .sub { display: block; font-weight: 400; color: var(--ink-mute); margin-top: 2px; }
+/* the names fill the column and scroll on their own — one name per row.
+   Rows size to their content rather than a fixed 24px: a scraped name carries
+   its bio on a second line underneath, which a fixed row height would clip. */
+#scrap-list .name-list--scroll {
+  grid-template-columns: 1fr; grid-auto-rows: minmax(24px, auto);
+  flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto;
+}
+/* The bio the scrape read for a name, under it: small, gray, and kept to ONE
+   line however long it is (the full text is the row's tooltip). */
+#scrap-list .name-bio {
+  margin: -1px 0 3px 7px;        /* line up under the chip's text, past its padding */
+  font-size: 10px; line-height: 1.35; color: var(--ink-mute);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* the "Scrolling…/Searching…" placeholder fills too, so the column keeps height */
+#scrap-list .scrap-acct > .hint { flex: 1 1 auto; margin: 6px 0 0; }
+
+/* Names a group of .cfg cards — the panel holds more than one now. */
+.cfg-sec-k {
+  font-size: 10.5px; color: var(--ink-mute); text-transform: uppercase;
+  letter-spacing: .04em; margin-bottom: -4px;
+}
+.cfg {
+  display: flex; flex-direction: column; gap: 5px;
+  border: 1px solid var(--line); border-radius: 9px;
+  padding: 10px 12px; background: var(--white);
+}
+.cfg:focus-within { border-color: var(--blue-500); box-shadow: 0 0 0 3px var(--blue-100); }
+.cfg-k { font-size: 12.5px; font-weight: 600; color: var(--blue-700); }
+.cfg-in { display: flex; align-items: center; gap: 6px; }
+.cfg-in input[type="number"] {
+  width: 78px; min-width: 0; flex: 0 0 78px;
+  height: 30px; padding: 2px 8px; font-size: 13px; border-radius: 6px;
+}
+.cfg-in.range input[type="number"] { width: 62px; flex: 0 0 62px; }
+.cfg-in em { font-style: normal; font-size: 11.5px; color: var(--ink-mute); flex: 1 1 auto; }
+.cfg-h { font-size: 11px; color: var(--ink-mute); line-height: 1.4; }
+/* without the flex/min-width reset the base `input` rule (flex:1, min-width:180px)
+   applies to the checkbox too and crushes its label into one word per line */
+.cfg-toggle input[type="checkbox"] {
+  width: 16px; height: 16px; min-width: 0; flex: 0 0 16px;
+  accent-color: var(--blue-600); margin: 0;
+}
+
+/* ── Sequence steps ─────────────────────────────────────────── */
+.steps { display: flex; align-items: stretch; gap: 6px; flex-wrap: wrap; }
+.step {
+  display: flex; align-items: center; gap: 7px;
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 12px; background: var(--white);
+  font-size: 12.5px; color: var(--ink-soft); cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.step:hover { border-color: var(--blue-500); }
+.step input {
+  width: 15px; height: 15px; min-width: 0; flex: 0 0 15px;
+  accent-color: var(--blue-600); margin: 0;
+}
+.step .badge {
+  display: grid; place-items: center; flex: none;
+  width: 18px; height: 18px; border-radius: 50%; box-sizing: border-box;
+  background: var(--blue-100); color: var(--blue-700);
+  font-size: 10.5px; font-weight: 700;
+}
+.step em { font-style: normal; font-size: 11px; color: var(--ink-mute); }
+.step-arrow { display: flex; align-items: center; color: var(--ink-mute); font-size: 13px; }
+
+/* ── Attempt budget ─────────────────────────────────────────────
+   The circle on a retrying step: starts at its full budget and counts down to
+   0 as attempts are spent. Deliberately not the same shape language as .badge
+   (which is the step's NUMBER) — outlined, not filled, until it starts biting. */
+.tries {
+  display: grid; place-items: center; flex: none; box-sizing: border-box;
+  width: 17px; height: 17px; border-radius: 50%;
+  border: 1px solid var(--blue-200); background: var(--white); color: var(--ink-soft);
+  font-style: normal; font-size: 9.5px; font-weight: 700; line-height: 1;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.tries.low   { border-color: #fbbf24; background: #fffbeb; color: #92400e; }
+.tries.spent { border-color: var(--bad); background: var(--bad); color: var(--white); }
+
+/* A step with more than one way to run it (Log in: cursor, then inspect) shows
+   a labelled chip per method, each with its own attempt circle. */
+.methods { display: inline-flex; align-items: center; gap: 6px; }
+.method {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 4px 2px 7px; border-radius: 999px;
+  border: 1px dashed transparent; transition: border-color .15s, background .15s, opacity .15s;
+}
+.method em { font-style: normal; font-size: 10.5px; color: var(--ink-mute); }
+.method.on { border-color: var(--blue-200); background: var(--blue-50); }   /* the one in play */
+.method.on em { color: var(--blue-700); }
+.method.used { opacity: .5; }                                              /* budget spent, moved on */
+
+/* ── Step states ────────────────────────────────────────────────
+   Everything not yet run is faded back, so the one that's live — and the ones
+   already finished — are the only things carrying colour.
+
+   idle    = ticked, not run yet    (faded)
+   skip    = unticked, won't run    (faded further, dashed)
+   running = in progress            (amber + spinner)
+   done    = finished ok            (green ✓)
+   failed  = errored                (red ✕)                        */
+.step { opacity: 1; transition: opacity .2s, background .2s, border-color .2s, filter .2s; }
+
+.step.idle {
+  background: var(--white); border-color: var(--line);
+  opacity: .5; filter: saturate(.4);
+}
+.step.idle .badge { background: var(--blue-100); color: var(--blue-700); }
+.step.idle:hover { opacity: .8; filter: none; }   /* still respond to the mouse */
+
+.step.skip {
+  background: var(--white); border-style: dashed; border-color: var(--line);
+  opacity: .3; filter: grayscale(1);
+}
+.step.skip .badge { background: var(--line); color: var(--ink-mute); }
+.step.skip:hover { opacity: .55; }
+
+/* live and finished steps come back to full strength */
+.step.running, .step.done, .step.failed { opacity: 1; filter: none; }
+
+.step.running { background: #fffbeb; border-color: #fbbf24; color: #92400e;
+                box-shadow: 0 0 0 3px rgba(251,191,36,.18); }
+.step.running .badge {          /* empty text + ring = spinner */
+  background: transparent;
+  border: 2px solid rgba(251,191,36,.35);
+  border-top-color: #d97706;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.step.done    { background: #f0fdf4; border-color: #86efac; color: #166534; }
+.step.done .badge { background: var(--ok); color: var(--white); }
+
+.step.failed  { background: #fef2f2; border-color: #fca5a5; color: #991b1b; }
+.step.failed .badge { background: var(--bad); color: var(--white); }
+
+/* ── Live address-bar mirror (step 3) ───────────────────────── */
+/* Compact: it flashes up only while step 3 types, so it stays small and out of
+   the way rather than a full-size card. */
+.url-check {
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 5px 8px; background: var(--white);
+  display: flex; flex-direction: column; gap: 3px;
+  transition: border-color .15s, background .15s;
+}
+.url-check.ok   { border-color: #86efac; background: #f0fdf4; }
+.url-check.warn { border-color: #fbbf24; background: #fffbeb; }
+.uc-head { display: flex; align-items: baseline; gap: 6px; }
+.uc-head b  { font-size: 10.5px; color: var(--blue-700); }
+.uc-head em { font-style: normal; font-size: 9px; color: var(--ink-mute); }
+.url-check dl {
+  display: grid; grid-template-columns: auto 1fr; gap: 0 8px; margin: 0;
+  align-items: baseline;
+}
+.url-check dt { font-size: 9px; color: var(--ink-mute); text-transform: uppercase; letter-spacing: .04em; }
+.url-check dd { margin: 0; font-size: 10.5px; color: var(--ink); word-break: break-all; }
+.mono { font-family: "Cascadia Code", Consolas, monospace; }
+#uc-chrome .hit { color: #166534; background: rgba(134,239,172,.35); border-radius: 2px; }
+/* the typed-so-far progress bar */
+.uc-bar { height: 3px; border-radius: 2px; background: var(--blue-100); overflow: hidden; }
+.uc-bar span { display: block; height: 100%; width: 0; background: var(--blue-500); transition: width .12s linear; }
+.url-check.ok .uc-bar span { background: var(--ok); }
+.uc-note { font-size: 9.5px; color: var(--ink-soft); }
+.url-check.ok   .uc-note { color: #166534; font-weight: 600; }
+.url-check.warn .uc-note { color: #92400e; }
+
+/* ── Account queue (Automation panel) ───────────────────────── */
+.acc-queue {
+  display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid var(--blue-200); border-radius: 8px;
+  padding: 5px; background: var(--blue-50);
+}
+.q-row {
+  display: grid;
+  grid-template-columns: 18px minmax(90px, 1fr) minmax(120px, 1.6fr) auto auto auto auto;
+  gap: 8px; align-items: center;
+  padding: 4px 7px; border-radius: 5px; cursor: pointer;
+  font-size: 11.5px; color: var(--ink-soft);
+  border: 1px solid transparent;
+}
+.q-row:hover { background: var(--white); }
+.q-row.on { background: var(--white); border-color: var(--blue-500); }
+.q-n {
+  display: grid; place-items: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--blue-600); color: var(--white);
+  font-size: 9.5px; font-weight: 700;
+}
+.q-name { font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-mail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-pw {
+  font-size: 10.5px; background: var(--white); color: var(--ink-soft);
+  border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px;
+  max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.q-sess { font-size: 10px; font-weight: 600; }
+.q-sess.ok  { color: var(--ok); }
+.q-sess.off { color: var(--ink-mute); }
+
+/* ── Per-account step strip ─────────────────────────────────── */
+.q-item { border-radius: 6px; }
+.q-item + .q-item { margin-top: 3px; border-top: 1px solid var(--blue-100); padding-top: 3px; }
+
+.q-steps {
+  display: flex; align-items: center; justify-content: center; gap: 4px; flex-wrap: wrap;
+  padding: 3px 7px 5px;               /* centred — the 5 steps sit mid-width */
+}
+.q-step {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--line); border-radius: 5px;
+  padding: 2px 7px; background: var(--white);
+  font-size: 10.5px; color: var(--ink-soft); white-space: nowrap;
+  transition: opacity .2s, background .2s, border-color .2s, filter .2s;
+}
+.q-step em { font-style: normal; font-size: 9px; color: var(--ink-mute); }
+.q-badge {
+  display: grid; place-items: center; box-sizing: border-box;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--blue-100); color: var(--blue-700);
+  font-size: 8px; font-weight: 700;
+}
+.q-arrow { color: var(--ink-mute); font-size: 9px; }
+
+/* the same countdown, sized for an account's own strip */
+.q-tries {
+  display: inline-grid; place-items: center; flex: none; box-sizing: border-box;
+  width: 13px; height: 13px; border-radius: 50%;
+  border: 1px solid var(--blue-200); background: var(--white); color: var(--ink-soft);
+  font-style: normal; font-size: 8px; font-weight: 700; line-height: 1;
+}
+.q-tries.low   { border-color: #fbbf24; background: #fffbeb; color: #92400e; }
+.q-tries.spent { border-color: var(--bad); background: var(--bad); color: var(--white); }
+
+/* method chips on an account's own strip — same idea, tighter */
+.q-step .methods { gap: 4px; }
+.q-step .method { gap: 3px; padding: 1px 3px 1px 5px; }
+.q-step .method em { font-size: 8.5px; }
+.q-step .method.on { border-color: var(--blue-200); background: var(--blue-50); }
+.q-step .method.used { opacity: .5; }
+
+/* same language as the big steps: faded until it runs, colour when it does */
+.q-step.idle    { opacity: .5; filter: saturate(.4); }
+.q-step.skip    { opacity: .3; filter: grayscale(1); border-style: dashed; }
+.q-step.running { background: #fffbeb; border-color: #fbbf24; color: #92400e; opacity: 1; filter: none; }
+.q-step.running .q-badge {
+  background: transparent; border: 2px solid rgba(251,191,36,.35);
+  border-top-color: #d97706; animation: spin .7s linear infinite;
+}
+.q-step.done    { background: #f0fdf4; border-color: #86efac; color: #166534; opacity: 1; filter: none; }
+.q-step.done .q-badge { background: var(--ok); color: var(--white); }
+.q-step.failed  { background: #fef2f2; border-color: #fca5a5; color: #991b1b; opacity: 1; filter: none; }
+.q-step.failed .q-badge { background: var(--bad); color: var(--white); }
+
+/* which queued account is live, and which are finished */
+.q-row.running { background: #fffbeb; border-color: #fbbf24; }
+.q-row.running .q-n { background: #d97706; animation: pulse 1.4s infinite; }
+.q-row.done    { background: #f0fdf4; border-color: #86efac; }
+.q-row.done .q-n { background: var(--ok); font-size: 0; }   /* number out… */
+.q-row.done .q-n::after { content: "✓"; font-size: 10px; }  /* …tick in */
+.q-row.failed  { background: #fef2f2; border-color: #fca5a5; }
+.q-row.failed .q-n { background: var(--bad); font-size: 0; }
+.q-row.failed .q-n::after { content: "✕"; font-size: 10px; }
+
+/* ── Activity log ───────────────────────────────────────────── */
+.live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-soft); }
+.live i {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--ink-mute);
+}
+.live.on i { background: var(--ok); box-shadow: 0 0 0 3px rgba(22,163,74,.18); animation: pulse 2s infinite; }
+.live.off i { background: var(--bad); box-shadow: 0 0 0 3px rgba(220,38,38,.18); }
+@keyframes pulse { 50% { opacity: .35; } }
+
+.seg { display: inline-flex; flex-wrap: wrap; gap: 2px; background: var(--blue-50);
+       border: 1px solid var(--line); border-radius: 7px; padding: 2px; }
+.seg-b {
+  border: none; background: transparent; border-radius: 5px;
+  padding: 4px 9px; font: inherit; font-size: 11.5px; color: var(--ink-soft); cursor: pointer;
+}
+.seg-b:hover { background: var(--blue-100); }
+.seg-b.on { background: var(--blue-600); color: var(--white); }
+
+.chk { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-soft); }
+.chk input { width: 14px; height: 14px; min-width: 0; flex: 0 0 14px; accent-color: var(--blue-600); margin: 0; }
+
+/* fills the panel and scrolls on its own */
+.log {
+  flex: 1; min-height: 0; overflow-y: auto;
+  background: var(--ink); border-radius: 8px; padding: 8px;
+  font-family: "Cascadia Code", Consolas, monospace; font-size: 12px;
+}
+.log-row {
+  display: grid; grid-template-columns: 74px 82px 1fr auto;
+  gap: 8px; align-items: baseline;
+  padding: 3px 6px; border-radius: 4px;
+  border-left: 2px solid transparent;
+  color: #cbd5e1; white-space: nowrap;
+}
+.log-row:hover { background: rgba(255,255,255,.05); }
+.log-row .t { color: #64748b; font-size: 11px; }
+.log-row .s { color: #93c5fd; font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.log-row .m { white-space: pre-wrap; word-break: break-word; }
+.log-row .d { color: #64748b; font-size: 11px; }
+.log-row.ok    { border-left-color: #4ade80; }
+.log-row.warn  { border-left-color: #fbbf24; color: #fde68a; }
+.log-row.error { border-left-color: #f87171; color: #fecaca; background: rgba(248,113,113,.07); }
+.log-empty { color: var(--ink-mute); padding: 12px; font-size: 12px; }
+
+/* ── Empty state ────────────────────────────────────────────── */
+.empty {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; justify-content: center;
+  text-align: center; padding: 72px 24px; color: var(--ink-mute);
+}
+.empty-mark {
+  display: grid; place-items: center; margin: 0 auto 14px;
+  width: 56px; height: 56px; border-radius: 14px;
+  background: var(--blue-100); color: var(--blue-600); font-size: 22px;
+}
+.empty h2 { font-size: 17px; color: var(--ink-soft); }
+.empty p  { font-size: 13px; margin-top: 4px; }
+
+/* ── Toast ──────────────────────────────────────────────────── */
+.toast {
+  position: fixed; bottom: 20px; left: 50%;
+  transform: translate(-50%, calc(100% + 40px));
+  padding: 11px 20px; border-radius: 999px;
+  background: var(--ink); color: var(--white);
+  font-size: 13px; box-shadow: var(--shadow);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: transform .25s, opacity .25s, visibility .25s; z-index: 50;
+}
+.toast.show {
+  transform: translate(-50%, 0);
+  opacity: 1; visibility: visible;
+}
+.toast.bad  { background: var(--bad); }
+
+@media (max-width: 640px) {
+  .topbar, .tabbar, .stage { padding-left: 8px; padding-right: 8px; }
+  .tab { flex: 1 1 auto; text-align: center; }
+}

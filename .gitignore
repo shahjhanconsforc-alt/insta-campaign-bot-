@@ -1,0 +1,23 @@
+# Secrets — real env files stay local; only the placeholder template is committed
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime artifacts
+backend/data/store.json
+backend/data/screenshots/
+backend/data/chrome-profile/
+backend/data/profiles/
+backend/data/campaign_media/
+backend/data/minio-cache/
+backend/data/store.before-minio.json
+*.tmp
+
+# Node (legacy JS backend)
+node_modules/

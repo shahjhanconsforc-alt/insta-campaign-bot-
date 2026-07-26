@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from backend.main import app; print\\('app imports OK,', len\\([r for r in app.routes if 'minio' in r.path or 'usernames' in r.path]\\), 'new routes present'\\)\")",
+      "Bash(python -m backend.main)",
+      "Bash(python -c ' *)",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/diag.py\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/diag2.py\")",
+      "Bash(python -c \"from backend.main import app; print\\('route:', any\\(r.path=='/api/automation/reel-actions' for r in app.routes\\)\\)\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/reel_test.py\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/comment_test.py\")",
+      "Bash(python -c \"from backend.main import app; print\\('route:', any\\(r.path=='/api/automation/notification-filters' for r in app.routes\\)\\)\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/notif_test.py\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/settings_match_test.py\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/reel_comment_test.py\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/reel_split_test.py\")",
+      "Bash(python -c \"import backend.automation.visit as v, backend.routes.automation_routes as r; print\\('imports OK'\\); print\\('has click_reel_action:', hasattr\\(v,'click_reel_action'\\)\\); print\\('REEL_ACTION_SEL keys:', list\\(v._REEL_ACTION_SEL.keys\\(\\)\\)\\)\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/scrap_cols_shot.py\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/scrap_tech_shot.py\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/both_batches_test.py\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/both_ui_shot.py\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/both_pause_test.py\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/pause_ui_shot.py\")",
+      "Bash(python \"C:/Users/User/AppData/Local/Temp/claude/c--Users-User-Desktop-insta-bot/b877546e-daa3-47bd-8015-8d860e082f62/scratchpad/seed_test.py\")",
+      "Bash(python -c \"import backend.automation.visit; import backend.routes.automation_routes; print\\('imports OK'\\)\")"
+    ]
+  }
+}
