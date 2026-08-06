@@ -20,15 +20,21 @@ BUCKET = mc.BUCKET_MESSAGES
 OBJECT_NAME = "sms_drafts.txt"
 _LEGACY_JSON = "sms_drafts.json"      # older format, read once then migrated to .txt
 
-_FIELDS = ("id", "name", "text")
+_FIELDS = ("id", "name", "text", "disabled")
 
 log = mc.log
+
+# TSV cells are strings, so the disabled flag travels as "1" / "" and comes back
+# as a real bool. str(True) would round-trip as the truthy string "False".
+_TRUTHY = (True, 1, "1", "true", "True")
 
 
 def push(drafts: list) -> dict:
     """Store the given drafts, replacing what's there. Returns the count."""
     rows = [d if isinstance(d, dict) else {"text": str(d or "")}
             for d in (drafts or [])]
+    rows = [{**d, "disabled": "1" if d.get("disabled") in _TRUTHY else ""}
+            for d in rows]
     mc.put_bytes(BUCKET, OBJECT_NAME, tsv.dumps(rows, _FIELDS),
                  "text/tab-separated-values; charset=utf-8")
     log.info("pushed %d SMS draft(s) to MinIO", len(rows))
@@ -56,6 +62,9 @@ def load() -> list:
         drafts = _parse_legacy_json(raw)
     else:
         drafts = tsv.loads(raw, _FIELDS)
+    for d in drafts:                                  # stored "1"/"" -> real bool
+        if isinstance(d, dict):
+            d["disabled"] = d.get("disabled") in _TRUTHY
     log.info("loaded %d SMS draft(s) from MinIO", len(drafts))
     return drafts
 

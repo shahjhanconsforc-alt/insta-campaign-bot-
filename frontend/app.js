@@ -910,8 +910,9 @@ function smsBarHtml() {
   return campaignSms.map((draft, i) => {
     const on = i === activeSms;
     const label = smsLabel(i);
-    return `<div class="sms-tab ${on ? 'on' : ''}" data-sms="${i}" role="tab"
-                 tabindex="0" aria-selected="${on}">
+    const off = !!draft.disabled;          // disabled = kept but never sent, shown faded
+    return `<div class="sms-tab ${on ? 'on' : ''} ${off ? 'off' : ''}" data-sms="${i}" role="tab"
+                 tabindex="0" aria-selected="${on}"${off ? ' title="Disabled — not used in the campaign"' : ''}>
               <span class="sms-label">${esc(label)}</span>
               <button type="button" class="sms-edit" data-sms-edit="${i}"
                       title="Edit, rename, update or delete" aria-label="Options for ${esc(label)}">✎</button>
@@ -971,6 +972,8 @@ function openSmsMenu(index, anchor) {
   smsMenuTarget = index;
   const del = menu.querySelector('[data-sms-act="delete"]');
   if (del) del.disabled = campaignSms.length <= 1;   // can't delete the last draft
+  const tog = menu.querySelector('[data-sms-act="toggle"]');
+  if (tog) tog.textContent = campaignSms[index]?.disabled ? '✅ Enable' : '🚫 Disable';
   menu.hidden = false;
   const r = anchor.getBoundingClientRect();
   menu.style.top = `${r.bottom + 4}px`;
@@ -1009,6 +1012,11 @@ $$('#sms-menu [data-sms-act], #setup-sms-menu [data-sms-act]').forEach(btn =>
       switchSms(i);
       saveSmsDrafts();                       // persist, then lock again
       setSmsEditable(false);
+    } else if (act === 'toggle') {
+      campaignSms[i].disabled = !campaignSms[i].disabled;   // disabled = faded, never sent
+      renderSmsTabs();
+      saveSmsDrafts();                       // the flag survives a restart
+      toast(`${smsLabel(i)} ${campaignSms[i].disabled ? 'disabled — will not be used in the campaign' : 'enabled'}`);
     } else if (act === 'delete') {
       if (!confirm(`Delete ${smsLabel(i)}? This can't be undone.`)) return;
       removeSms(i);
@@ -1030,7 +1038,9 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape') clos
    them back when the app starts so they survive a restart. */
 async function saveSmsDrafts(btn) {
   syncActiveDraft();
-  const drafts = campaignSms.map((s, i) => ({ id: `sms${i + 1}`, text: s.text, name: (s.name || '').trim() }));
+  const drafts = campaignSms.map((s, i) => ({
+    id: `sms${i + 1}`, text: s.text, name: (s.name || '').trim(), disabled: !!s.disabled,
+  }));
   try {
     await api('/campaign/sms', { method: 'PUT', body: { drafts } });
     toast('Messages saved');
@@ -1056,6 +1066,7 @@ async function loadSmsDrafts() {
       drafts.forEach(d => campaignSms.push({
         text: String(draftText(d)),
         name: (d && typeof d === 'object' && d.name) ? String(d.name) : '',
+        disabled: !!(d && typeof d === 'object' && d.disabled),
       }));
       activeSms = 0;
       showActiveDraft();
@@ -1751,6 +1762,7 @@ function mountSetupInline() {
 function openCampaignSetup() {
   mountSetupInline();
   if (!$$('#setup-accounts .setup-acct-row').length) addSetupAcctRow();   // start with one
+  loadSetupAccounts();                    // bring back the saved accounts' credentials
   const wiz = $('#campaign-setup');
   try { if (wiz && !wiz.open) wiz.show(); } catch { wiz?.setAttribute('open', ''); }
   setupGoto(1);
@@ -1790,21 +1802,59 @@ $('#wiz-steps')?.addEventListener('click', e => {
 });
 
 /* Step 1 — one or more account rows; each creates the account then logs it in
-   (reuses the tested login flow). */
-function addSetupAcctRow() {
+   (reuses the tested login flow). Pass a saved account to prefill the row —
+   that's how logged-in credentials come back after a reload. */
+function addSetupAcctRow(account = null) {
   const box = $('#setup-accounts');
-  if (!box) return;
+  if (!box) return null;
   const row = document.createElement('div');
   row.className = 'setup-acct-row';
+  const saved = !!account;
   row.innerHTML =
-    '<input class="mini acct-label" placeholder="optional">' +
-    '<input class="mini acct-login" placeholder="username / email / phone">' +
-    '<input class="mini acct-pass" type="password" placeholder="password">' +
+    `<input class="mini acct-label" placeholder="optional" value="${saved ? esc(account.label || '') : ''}">` +
+    `<input class="mini acct-login" placeholder="username / email / phone" value="${saved ? esc(account.login || '') : ''}">` +
+    '<span class="acct-pass-wrap">' +
+      `<input class="mini acct-pass" type="password" placeholder="${saved ? 'saved — 👁 to reveal' : 'password'}">` +
+      (saved ? '<button class="icon-btn acct-eye" type="button" title="Show the saved password" aria-label="Show the saved password">👁</button>' : '') +
+    '</span>' +
     '<button class="btn btn-sm acct-login-btn" type="button">Login</button>' +
     '<button class="icon-btn acct-close" type="button" aria-label="Close this account browser" title="Close this account’s browser window">⏻</button>' +
     '<span class="acct-status hint"></span>' +
-    '<button class="icon-btn acct-remove" type="button" aria-label="Remove account">✕</button>';
+    '<button class="icon-btn acct-remove" type="button" aria-label="Remove account and delete its saved credentials" title="Remove this account and delete its saved credentials">✕</button>';
   box.appendChild(row);
+  if (saved) {
+    row.dataset.accountId = account.id;
+    row.dataset.saved = '1';                       // credentials live in the store
+    // Ready for the campaign means a window it can actually drive — a stored
+    // session with no window open still needs Login to reopen it.
+    const ready = !!account.logged_in && !!account.window_open;
+    if (ready) row.dataset.loggedIn = '1';
+    const status = row.querySelector('.acct-status');
+    status.className = 'acct-status hint' + (ready ? ' good' : '');
+    status.textContent = ready ? '✅ logged in · window open'
+      : account.logged_in ? '💾 saved · session on disk — press Login to reopen'
+      : '💾 saved — press Login';
+  }
+  return row;
+}
+
+/* Rebuild the rows from the saved accounts, so credentials entered here survive
+   a reload and stay until the row's ✕ deletes them. Runs whenever the wizard
+   opens; rows the user is still typing into (no account id, some text) are kept. */
+async function loadSetupAccounts() {
+  const box = $('#setup-accounts');
+  if (!box) return;
+  let accounts = [];
+  try { ({ accounts } = await api('/accounts')); } catch { return; }   // offline: leave the rows alone
+  // Anything half-typed and not yet saved stays on screen — never wipe input.
+  const drafts = $$('#setup-accounts .setup-acct-row').filter(r =>
+    !r.dataset.accountId &&
+    (r.querySelector('.acct-login').value.trim() || r.querySelector('.acct-pass').value));
+  box.innerHTML = '';
+  (accounts || []).forEach(a => addSetupAcctRow(a));
+  drafts.forEach(r => box.appendChild(r));
+  if (!$$('#setup-accounts .setup-acct-row').length) addSetupAcctRow();   // always one to type into
+  updateSetupGate();
 }
 const IG_LOGIN_URL = 'https://www.instagram.com/accounts/login/';
 
@@ -1838,8 +1888,24 @@ async function loginSetupRow(row) {
   const password = row.querySelector('.acct-pass').value;
   const label = row.querySelector('.acct-label').value.trim();
   const status = row.querySelector('.acct-status');
-  if (!login || !password) { status.className = 'acct-status hint bad'; status.textContent = 'need username + password'; return; }
   const set = (cls, txt) => { status.className = 'acct-status hint' + (cls ? ' ' + cls : ''); status.textContent = txt; };
+
+  // A restored row already has its credentials in the store — the backend types
+  // them from there, so nothing needs re-entering (and the box stays empty).
+  if (row.dataset.accountId && !password) {
+    set('', 'starting…');
+    try {
+      const id = Number(row.dataset.accountId);
+      const r = await silentCursorLogin(id, status);
+      if (r.logged_in) { row.dataset.loggedIn = '1'; set('good', '✅ logged in'); }
+      else if (['2fa_required', 'challenge'].includes(r.action)) { set('', '⚠️ finish 2FA / verify in Chrome'); }
+      else { set('bad', r.detail || "didn't complete"); }
+    } catch (e) { set('bad', e.message); }
+    finally { updateSetupGate(); }
+    return;
+  }
+
+  if (!login || !password) { status.className = 'acct-status hint bad'; status.textContent = 'need username + password'; return; }
   set('', 'starting…');
   try {
     let accountId;
@@ -1854,6 +1920,7 @@ async function loginSetupRow(row) {
       const existing = (accounts || []).find(a => (a.login || '').toLowerCase() === login.toLowerCase());
       if (!existing) throw e;
       row.dataset.accountId = existing.id;
+      markSetupRowSaved(row);                      // already in the store — show it as saved
       set('', 'opening saved session…');
       await api(`/accounts/${existing.id}/open`, { method: 'POST' });   // open its window
       if (existing.logged_in === false) { set('', '🌐 opened — not logged in'); }
@@ -1861,6 +1928,7 @@ async function loginSetupRow(row) {
       return;
     }
     row.dataset.accountId = accountId;
+    markSetupRowSaved(row);                        // credentials now live in the store
     const r = await silentCursorLogin(accountId, status);              // same cursor steps, hidden
     if (r.logged_in) { row.dataset.loggedIn = '1'; set('good', '✅ logged in'); }
     else if (['2fa_required', 'challenge'].includes(r.action)) { set('', '⚠️ finish 2FA / verify in Chrome'); }
@@ -1868,6 +1936,64 @@ async function loginSetupRow(row) {
   } catch (e) { set('bad', e.message); }
   finally { updateSetupGate(); }                 // ≥1 logged-in account unlocks Continue
 }
+/* A row whose credentials now live in the store: clear the typed password (it's
+   saved — the backend types it from there) and grow the 👁 reveal button. */
+function markSetupRowSaved(row) {
+  if (row.dataset.saved === '1') return;
+  row.dataset.saved = '1';
+  const pass = row.querySelector('.acct-pass');
+  if (pass) { pass.value = ''; pass.placeholder = 'saved — 👁 to reveal'; }
+  const wrap = row.querySelector('.acct-pass-wrap');
+  if (wrap && !wrap.querySelector('.acct-eye')) {
+    wrap.insertAdjacentHTML('beforeend',
+      '<button class="icon-btn acct-eye" type="button" title="Show the saved password" aria-label="Show the saved password">👁</button>');
+  }
+}
+
+/* 👁 — pull this account's stored password and show it in the box; again to hide.
+   Fetched only when asked for, so passwords aren't sitting in the page. */
+async function toggleSetupSecret(row) {
+  const id = Number(row.dataset.accountId);
+  const pass = row.querySelector('.acct-pass');
+  const eye = row.querySelector('.acct-eye');
+  if (!id || !pass || !eye) return;
+  if (pass.type === 'text') {                    // hide again
+    pass.type = 'password'; pass.value = ''; pass.readOnly = false;
+    eye.textContent = '👁'; eye.title = 'Show the saved password';
+    return;
+  }
+  try {
+    const { password } = await api(`/accounts/${id}/secret`);
+    pass.type = 'text'; pass.value = password; pass.readOnly = true;   // shown, not edited
+    eye.textContent = '🙈'; eye.title = 'Hide the password';
+  } catch (e) { toast(`Could not read the password: ${e.message}`, true); }
+}
+
+/* ✕ — remove the row AND delete the account it saved: credentials out of the
+   store and its Chrome profile off disk, so nothing is left behind. */
+async function removeSetupRow(row) {
+  const id = Number(row.dataset.accountId);
+  const who = row.querySelector('.acct-login')?.value.trim() || `account ${id}`;
+  if (id && !confirm(`Remove ${who}? Its saved credentials and session are deleted.`)) return;
+  if (id) {
+    const status = row.querySelector('.acct-status');
+    if (status) { status.className = 'acct-status hint'; status.textContent = 'removing…'; }
+    try {
+      await api(`/accounts/${id}/session/close`, { method: 'POST' }).catch(() => {});  // free the profile
+      await api(`/accounts/${id}`, { method: 'DELETE' });
+      toast(`${who} removed — credentials deleted`);
+    } catch (e) {
+      if (status) { status.className = 'acct-status hint bad'; status.textContent = e.message; }
+      toast(`Could not delete ${who}: ${e.message}`, true);
+      return;                                    // keep the row: nothing was deleted
+    }
+  }
+  row.remove();
+  if (!$$('#setup-accounts .setup-acct-row').length) addSetupAcctRow();   // never leave it empty
+  updateSetupGate();
+  loadAccountPickers();                          // the account is gone everywhere else too
+}
+
 /* The account ids that logged in — the campaign fans out across them. */
 function loggedInAccountIds() {
   return $$('#setup-accounts .setup-acct-row')
@@ -1894,9 +2020,8 @@ $('#setup-accounts')?.addEventListener('click', e => {
   const row = e.target.closest('.setup-acct-row'); if (!row) return;
   if (e.target.closest('.acct-login-btn')) loginSetupRow(row);
   else if (e.target.closest('.acct-close')) closeSetupRow(row);
-  else if (e.target.closest('.acct-remove')) {
-    if ($$('#setup-accounts .setup-acct-row').length > 1) row.remove();
-  }
+  else if (e.target.closest('.acct-eye')) toggleSetupSecret(row);
+  else if (e.target.closest('.acct-remove')) removeSetupRow(row);
 });
 $('#btn-setup-add-acct')?.addEventListener('click', addSetupAcctRow);
 $('#btn-setup-login-all')?.addEventListener('click', async () => {
@@ -2054,8 +2179,8 @@ function setupMessagePairs() {
   if ($('#setup-skip-msg')?.checked) return [];       // messages skipped -> none
   syncActiveDraft();                                  // capture the in-progress edit
   return campaignSms
-    .map((s, i) => ({ text: (s.text || '').trim(), label: smsLabel(i) }))
-    .filter(p => p.text);
+    .map((s, i) => ({ text: (s.text || '').trim(), label: smsLabel(i), off: !!s.disabled }))
+    .filter(p => p.text && !p.off);          // disabled drafts never reach the run
 }
 /* Just the texts (gate checks, pool size). */
 function setupMessagePool() {
@@ -2690,8 +2815,8 @@ bind('#btn-campaign', '#out-campaign', async out => {
   // The SMS pool: every non-empty draft (with its tab name), or "Hello" when empty.
   syncActiveDraft();
   const pairs = campaignSms
-    .map((s, i) => ({ text: s.text.trim(), label: smsLabel(i) }))
-    .filter(p => p.text);
+    .map((s, i) => ({ text: s.text.trim(), label: smsLabel(i), off: !!s.disabled }))
+    .filter(p => p.text && !p.off);          // disabled drafts never reach the run
   const smsPool = pairs.length ? pairs.map(p => p.text) : ['Hello'];
   const smsLabels = pairs.length ? pairs.map(p => p.label) : ['sms1'];
 
@@ -2752,18 +2877,15 @@ const SCRAP_DEFAULTS = {
 };
 let scrapSettings = null;
 
+/* The panel head does NOT echo the configured pace back (it used to read
+   "pause 200-300ms · step 45-75% · batch 10-20, pause 3-8s"). Those numbers are
+   only ever changed in this dialog, so repeating them in the head told you
+   nothing you couldn't see by opening it — and the slot is worth far more
+   showing what the run is actually doing. See renderScrapTotals. */
 function writeScrapSettings(s) {
   scrapSettings = s;
   for (const [key, sel] of Object.entries(SET_FIELDS)) {
     if ($(sel) && s[key] !== undefined) $(sel).value = s[key];
-  }
-  const summary = $('#scrap-summary');
-  if (summary) {
-    summary.textContent =
-      `pause ${s.scroll_pause_min_ms}-${s.scroll_pause_max_ms}ms · ` +
-      `step ${s.scroll_step_min_pct}-${s.scroll_step_max_pct}% · ` +
-      `batch ${s.scrape_batch_min ?? 10}-${s.scrape_batch_max ?? 20}` +
-      `, pause ${s.scrape_batch_delay_min ?? 3}-${s.scrape_batch_delay_max ?? 8}s`;
   }
 }
 
@@ -2839,8 +2961,117 @@ $('#btn-set-reset')?.addEventListener('click', async () => {
    progress alongside them and lists names per account as they land. */
 const SCRAP_POLL_MS = 1200;
 
+/* A failure that is the PAGE's fault — a click that timed out on Instagram's
+   sidebar, a navigation that died, the window wedged — as opposed to a real
+   answer like "not logged in" or "no window open", which restarting cannot fix.
+   `Locator.click: Timeout 5000ms exceeded` is the one that used to end a run. */
+const SCRAP_PAGE_FAULT_RE =
+  /timeout|timed out|locator\.|exceeded|navigation|net::|target (page|closed)|crash|disconnect|failed to fetch|network/i;
+
+/* How many times the panel itself reloads a window and starts that account's
+   scrape again from 0. The backend already does this internally (it reloads and
+   restarts up to 5 times without the request ever returning); this is the outer
+   net for when the whole request falls over instead. */
+const SCRAP_AUTO_RESTARTS = 3;
+
+/* Why a run ended. An unlimited scrape that was Stopped and one whose feed dried
+   up both just… end, and the panel used to report them identically — leaving
+   "why did it stop?" unanswerable once the (in-memory) activity log was gone. */
+const END_REASON = {
+  stopped: 'stopped by the ⏹ Stop button',
+  dry: 'no new names for several batches — feed and search dried up',
+  target: 'reached its 🎯 target'
+};
+
+/* Don't auto-restart into a Stop: the run "failing" right after ⏹ is the Stop
+   working, and restarting would fight the person who pressed it. */
+async function runIsStopping() {
+  try {
+    const s = await api('/automation/control');
+    return !!(s.stopping || s.paused);
+  } catch { return false; }        // can't ask — assume not, the retry is bounded
+}
+
+/* ── Scrapping run totals (the panel-head slot beside ⚙️) ────────
+   How many contacts the run has scraped across EVERY ticked account, and how
+   long it has been going. Both buttons in this panel feed it, so the head always
+   answers "how much, and for how long" without reading the cards one by one. */
+
+/* h:mm:ss, dropping the hour until there is one — a 40-second scrape reading
+   "0:00:40" is harder to take in at a glance than "00:40". */
+function hhmmss(seconds) {
+  const total = Math.max(0, Math.round(seconds || 0));
+  const h = Math.floor(total / 3600);
+  const mm = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
+  const ss = String(total % 60).padStart(2, '0');
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+/* Elapsed for one account's card: counted by the PANEL, from the moment its run
+   started to the moment it finished — so it keeps running across a backend
+   auto-restart (which resets the backend's own clock to 0) and freezes when the
+   account is done rather than ticking on forever. */
+function runSeconds(r, now = Date.now()) {
+  if (!r?.startedMs) return 0;
+  return ((r.endedMs || now) - r.startedMs) / 1000;
+}
+
+let scrapClock = null;          // the 1s ticker; live only while a run is on
+
+function stopScrapClock() {
+  if (scrapClock) { clearInterval(scrapClock); scrapClock = null; }
+}
+
+/* Write the head total. `runs` is either shape used in this panel — the
+   Scrapping runs (phase 'run'|'done') or the Search-Scrapping ones (done flag) —
+   so `busy` is worked out from whichever the run carries. */
+function renderScrapTotals(runs, startedMs, finished = false) {
+  const el = $('#scrap-summary');
+  if (!el) return;
+  const ids = Object.keys(runs || {});
+  if (!ids.length) { el.textContent = 'not scraping'; return; }
+
+  const isBusy = r => (r.phase ? r.phase === 'run' : !r.done);
+  const contacts = ids.reduce((n, id) => n + (runs[id].names?.length || 0), 0);
+  const saved = ids.reduce((n, id) => n + (runs[id].saved || 0), 0);
+  const busy = ids.filter(id => isBusy(runs[id])).length;
+  const failed = ids.filter(id => runs[id].error).length;
+
+  el.textContent =
+    `${finished ? '✅' : '⏱'} ${hhmmss((Date.now() - startedMs) / 1000)}` +
+    ` · ${contacts} contact${contacts === 1 ? '' : 's'}` +
+    (saved ? ` · ${saved} new` : '') +
+    ` · ${finished ? `${ids.length - failed}/${ids.length}` : `${busy}/${ids.length}`} account${ids.length === 1 ? '' : 's'}` +
+    (finished ? ' done' : ' running');
+}
+
+/* Start the head clock for a run and keep it ticking once a second — the pollers
+   run slower than that, and a timer that jumps 1.2s at a time reads as laggy.
+
+   It stops itself once every account has finished, so a handler that falls over
+   before it can stop the clock can't leave the head counting forever. */
+function startScrapTotals(runs, startedMs) {
+  stopScrapClock();
+  renderScrapTotals(runs, startedMs);
+  const finishedAll = () => {
+    const ids = Object.keys(runs);
+    return ids.length > 0 && ids.every(id => (runs[id].phase ? runs[id].phase !== 'run' : runs[id].done));
+  };
+  scrapClock = setInterval(() => {
+    renderScrapTotals(runs, startedMs, finishedAll());
+    if (finishedAll()) stopScrapClock();
+  }, 1000);
+}
+
 /* Which open-window accounts are ticked. A Set so a refresh can preserve it. */
 const scrapPicked = new Set();
+
+/* Every open account starts ticked — the common case is "scrape all of them".
+   scrapSeen remembers which ids we have already auto-ticked once, so a deliberate
+   untick survives the next refresh instead of being turned back on. An account
+   whose window closes drops out of both sets and is auto-ticked again if it
+   reopens. */
+const scrapSeen = new Set();
 
 /* Per-account collection technique: 'scroll' | 'search' | 'both'. Default 'both'
    so an account collects by scrolling AND searching unless narrowed. */
@@ -2888,7 +3119,12 @@ function loadScrapAccounts() {
     const open = accounts.filter(isOpen);
     // drop ticks + techniques for windows that have since closed
     [...scrapPicked].forEach(id => open.some(a => a.id === id) || scrapPicked.delete(id));
+    [...scrapSeen].forEach(id => open.some(a => a.id === id) || scrapSeen.delete(id));
     [...scrapTech.keys()].forEach(id => open.some(a => a.id === id) || scrapTech.delete(id));
+    // Tick every open window the first time we see it, so the panel opens ready
+    // to scrape everything. Anything unticked by hand stays unticked (it is in
+    // scrapSeen but not scrapPicked).
+    open.forEach(a => { if (!scrapSeen.has(a.id)) { scrapSeen.add(a.id); scrapPicked.add(a.id); } });
 
     box.innerHTML = open.length
       ? open.map(a => {
@@ -2936,7 +3172,7 @@ function loadScrapAccounts() {
     if (note) {
       note.className = open.length ? 'banner good' : 'banner';
       note.textContent = open.length
-        ? `${open.length} open window(s). Tick the ones to scrape and pick each one's technique — they run together.`
+        ? `${open.length} open window(s), all ticked. Untick any you want to skip and pick each one's technique — they run together.`
         : 'No open windows. Open an account first (Accounts → Check Login Status).';
     }
   }).catch(error => {
@@ -2999,6 +3235,31 @@ function wireScrapCopy() {
   });
 }
 
+/* The live list is wiped and rebuilt every poll, which resets each account's
+   scroll box back to the TOP — while new handles append at the BOTTOM, out of
+   sight. These two keep each box pinned to the bottom across rebuilds so the
+   newest handles stay in view; a user who scrolled UP to read older names keeps
+   their place until they scroll back down (then it sticks to the bottom again). */
+function scrapScrollStates(list) {
+  const state = {};
+  list.querySelectorAll('.scrap-acct[data-acct]').forEach(card => {
+    const box = card.querySelector('.name-list--scroll');
+    if (!box) return;
+    const pinned = box.scrollTop + box.clientHeight >= box.scrollHeight - 24;
+    state[card.dataset.acct] = { pinned, top: box.scrollTop };
+  });
+  return state;
+}
+function restoreScrapScroll(list, state) {
+  list.querySelectorAll('.scrap-acct[data-acct]').forEach(card => {
+    const box = card.querySelector('.name-list--scroll');
+    if (!box) return;
+    const prev = state[card.dataset.acct];
+    if (!prev || prev.pinned) box.scrollTop = box.scrollHeight;  // newest in view
+    else box.scrollTop = prev.top;                               // reading — hold still
+  });
+}
+
 /* One column per account in the live list. `runs` is a map id -> {who, tech,
    phase, subTech, batchTarget, pauseLeft, target, names, error}. Each card shows
    the account's technique tag + a live line with the current type, batch size,
@@ -3011,22 +3272,34 @@ function renderScrapRuns(runs) {
   const ids = Object.keys(runs);
   if (!ids.length) { list.innerHTML = '<p class="hint">Usernames will appear here as they are found.</p>'; return; }
 
+  const scroll = scrapScrollStates(list);   // survive the innerHTML wipe below
   list.innerHTML = ids.map(id => {
     const r = runs[id];
     const found = r.names.length;
     const tgt = r.target ? `${found}/${r.target}` : `${found}`;
+    // A run that recovered says so, so a restart never looks like a stall.
+    const backFromZero = (r.restarts || 0) + (r.pageRestarts || 0);
+    const again = backFromZero ? ` · restarted ×${backFromZero}` : '';
+    // This account's own running time — ticking while it works, frozen once done.
+    const clock = r.startedMs ? ` · ⏱ ${hhmmss(runSeconds(r))}` : '';
     let state, empty;
-    if (r.error)                 { state = `failed — ${esc(r.error)}`; empty = '—'; }
-    else if (r.phase === 'done') { state = `${tgt} found`; empty = 'No usernames were captured.'; }
+    if (r.restarting)            { state = `↻ page failed — refreshing and starting again from 0${again}`; empty = 'Restarting…'; }
+    else if (r.error)            { state = `failed — ${esc(r.error)}${again}`; empty = '—'; }
+    else if (r.phase === 'done') {
+      // Say WHY it ended, not just that it did — "328 found" alone reads like a
+      // stall when the target was unlimited.
+      const why = r.endReason ? ` · ${END_REASON[r.endReason] || r.endReason}` : '';
+      state = `${tgt} found${why}${again}`; empty = 'No usernames were captured.';
+    }
     else if (r.subTech === 'pause') {
       const p = Number.isFinite(r.pauseLeft) ? Math.max(0, Math.round(r.pauseLeft)) : null;
-      state = `⏸ paused${p != null ? ` · ${p}s` : ''}… · ${tgt}`;
+      state = `⏸ paused${p != null ? ` · ${p}s` : ''}… · ${tgt}${again}`;
       empty = 'Paused…';
     }
     else {
       const sub = r.subTech === 'search' ? 'searching' : 'scrolling';
       const bt = r.batchTarget ? ` · batch ${r.batchTarget}` : '';
-      state = `${sub}${bt}… · ${tgt}`;
+      state = `${sub}${bt}… · ${tgt}${again}`;
       empty = 'Collecting…';
     }
     const tag = TECH_LABEL[r.tech] || r.tech;
@@ -3036,11 +3309,12 @@ function renderScrapRuns(runs) {
       : `<p class="hint">${empty}</p>`;
     return `<div class="scrap-acct" data-acct="${id}">
               <div class="scrap-acct-head">${esc(r.who)} <span class="tech-tag">${tag}</span>
-                <span class="sub">· ${state}</span></div>
+                <span class="sub">· ${state}${clock}</span></div>
               ${chips}
             </div>`;
   }).join('');
   wireScrapCopy();
+  restoreScrapScroll(list, scroll);         // newest handles stay in view
 }
 
 /* Search-Scrapping: on each ticked window, click the sidebar Search and run 5
@@ -3065,14 +3339,16 @@ bind('#btn-search-scrap', '#out-scrap', async out => {
   }
   show(out, `Searching on ${ids.length} window(s), ${rounds} rounds each…`);
 
+  const startedMs = Date.now();
   const runs = {};
   ids.forEach(id => {
     runs[id] = { who: accountById(id)?.account_name || `#${id}`, names: [],
                  seeds: [], round: 0, rounds, saved: 0, bios: 0, bioMap: {},
-                 done: false, error: null };
+                 done: false, error: null, startedMs, endedMs: null };
     $(`#scrap-accounts .acct-chip[data-acct="${id}"]`)?.classList.add('running');
   });
   renderSearchRuns(runs);
+  startScrapTotals(runs, startedMs);        // head clock + running contact total
 
   // Poll each account's live progress so the panel shows "round 3/5" and that
   // round's names the moment they land, rather than nothing until the run ends.
@@ -3089,6 +3365,7 @@ bind('#btn-search-scrap', '#out-scrap', async out => {
       } catch { /* a dropped poll is harmless — the next catches up */ }
     }));
     renderSearchRuns(runs);
+    renderScrapTotals(runs, startedMs);     // new names land between clock ticks
   }, 700);
 
   // Each account is its own Chrome window driven independently, so they run
@@ -3104,18 +3381,23 @@ bind('#btn-search-scrap', '#out-scrap', async out => {
       runs[id].saved = r.saved_records || 0;
       runs[id].bios = r.bios_saved || 0;
       runs[id].done = true;
+      runs[id].endedMs = Date.now();       // freeze this account's clock
       chip?.classList.remove('running'); chip?.classList.add('done');
     } catch (error) {
       runs[id].error = error.message;
       runs[id].done = true;
+      runs[id].endedMs = Date.now();       // freeze this account's clock
       chip?.classList.remove('running'); chip?.classList.add('failed');
     }
     renderSearchRuns(runs);
   }));
 
   clearInterval(poll);
+  stopScrapClock();
   renderSearchRuns(runs);
+  renderScrapTotals(runs, startedMs, true);      // freeze the head on the totals
 
+  const ranFor = hhmmss((Date.now() - startedMs) / 1000);
   const ok = ids.filter(id => !runs[id].error);
   const bad = ids.filter(id => runs[id].error);
   const total = ok.reduce((n, id) => n + runs[id].names.length, 0);
@@ -3126,18 +3408,19 @@ bind('#btn-search-scrap', '#out-scrap', async out => {
     ...ok.map(id => `${runs[id].who}: ${runs[id].names.length} username(s) from ` +
                     `${runs[id].seeds.length} search(es) [${runs[id].seeds.join(', ')}]` +
                     (runs[id].bios ? ` · ${runs[id].bios} bios` : '') +
+                    ` in ${hhmmss(runSeconds(runs[id]))}` +
                     (runs[id].names.length ? `\n  ${runs[id].names.join(', ')}` : '')),
     ...bad.map(id => `${runs[id].who}: ${runs[id].error}`),
-    `\n${total} name(s) found, ${saved} new saved to Data, ${bios} bios saved to usernames_bio.json.`,
+    `\n${total} name(s) found in ${ranFor}, ${saved} new saved to Data, ${bios} bios saved to usernames_bio.json.`,
   ].join('\n'), bad.length > 0);
 
   if (note) {
     note.className = bad.length ? 'banner bad' : 'banner good';
     note.textContent = bad.length
-      ? `${total} name(s) found · ${saved} new saved · ${bios} bios · ${bad.length} window(s) failed.`
-      : `${total} name(s) found across ${ok.length} window(s) · ${saved} new saved to Data · ${bios} bios → usernames_bio.json.`;
+      ? `${total} name(s) found in ${ranFor} · ${saved} new saved · ${bios} bios · ${bad.length} window(s) failed.`
+      : `${total} name(s) found across ${ok.length} window(s) in ${ranFor} · ${saved} new saved to Data · ${bios} bios → usernames_bio.json.`;
   }
-  toast(bad.length ? `${bad.length} window(s) failed` : `${total} found · ${saved} new saved · ${bios} bios`,
+  toast(bad.length ? `${bad.length} window(s) failed` : `${total} found in ${ranFor} · ${saved} new saved · ${bios} bios`,
         bad.length > 0);
   if (saved || bios) loadRecords();           // the Data panel's list is now stale
 });
@@ -3150,22 +3433,26 @@ function renderSearchRuns(runs) {
   const ids = Object.keys(runs);
   if (!ids.length) { list.innerHTML = '<p class="hint">Usernames will appear here as they are found.</p>'; return; }
 
+  const scroll = scrapScrollStates(list);   // survive the innerHTML wipe below
   list.innerHTML = ids.map(id => {
     const r = runs[id];
     const seedNote = r.seeds.length ? ` · ${r.seeds.map(esc).join(', ')}` : '';
     const state = r.error ? `failed — ${esc(r.error)}`
                 : r.done  ? `${r.names.length} found in ${r.rounds} search(es)${seedNote}`
                           : `round ${r.round}/${r.rounds} · ${r.names.length} found so far${seedNote}`;
+    // This account's own running time — ticking while it works, frozen once done.
+    const clock = r.startedMs ? ` · ⏱ ${hhmmss(runSeconds(r))}` : '';
     const chips = r.names.length
       ? '<ol class="name-list name-list--scroll">' +
           r.names.map(n => nameRowHTML(n, r.bioMap)).join('') + '</ol>'
       : `<p class="hint">${r.error ? '—' : r.done ? 'No usernames found.' : 'Searching…'}</p>`;
     return `<div class="scrap-acct" data-acct="${id}">
-              <div class="scrap-acct-head">${esc(r.who)} <span class="sub">· ${state}</span></div>
+              <div class="scrap-acct-head">${esc(r.who)} <span class="sub">· ${state}${clock}</span></div>
               ${chips}
             </div>`;
   }).join('');
   wireScrapCopy();
+  restoreScrapScroll(list, scroll);         // newest handles stay in view
 }
 
 bind('#btn-scrap', '#out-scrap', async out => {
@@ -3181,12 +3468,22 @@ bind('#btn-scrap', '#out-scrap', async out => {
   // Per-account state. `tech` is the chosen technique; `subTech` is what's live
   // right now (scroll|search|pause) as the backend batches. Names accumulate
   // into a Set so each account shows one merged, de-duped list.
+  const startedMs = Date.now();
   const runs = {};
   ids.forEach(id => {
     runs[id] = { who: accountById(id)?.account_name || `#${id}`, tech: techOf(id),
                  phase: 'run', names: [], nameSet: new Set(), target,
                  subTech: techOf(id) === 'search' ? 'search' : 'scroll',
-                 batchTarget: 0, pauseLeft: null, saved: 0, bios: 0, bioMap: {}, error: null };
+                 batchTarget: 0, pauseLeft: null, saved: 0, bios: 0, bioMap: {}, error: null,
+                 // Timed by the panel, not the backend: an auto-restart resets the
+                 // backend's clock to 0 and this must keep counting the whole run.
+                 startedMs, endedMs: null,
+                 // How many times a wedged window sent this account back to 0.
+                 // Counted in two places because they recover at two levels:
+                 // `pageRestarts` are the backend's own (it reloads and carries
+                 // on without the request ever returning), `restarts` are the
+                 // panel's (the whole request fell over and was reissued).
+                 pageRestarts: 0, restarts: 0, restarting: false, lastError: null };
     $(`#scrap-accounts .acct-chip[data-acct="${id}"]`)?.classList.add('running');
   });
   const addNames = (id, arr) => (arr || []).forEach(n => {
@@ -3204,6 +3501,7 @@ bind('#btn-scrap', '#out-scrap', async out => {
     ? `Collecting up to ${target} username(s) per account on ${ids.length} window(s)…`
     : `Collecting usernames with NO limit on ${ids.length} window(s) — runs until the feed and search dry up, or you press Stop…`);
   renderScrapRuns(runs);
+  startScrapTotals(runs, startedMs);        // head clock + running contact total
 
   // One poller for all runs — every technique now reports through visit-progress
   // (technique = scroll|search|pause, batch_target = current random batch size,
@@ -3220,9 +3518,11 @@ bind('#btn-scrap', '#out-scrap', async out => {
         if (p.batch_target != null) r.batchTarget = p.batch_target;
         r.pauseLeft = p.pause_left;
         if (p.target) r.target = p.target;
+        if (p.restarts != null) r.pageRestarts = p.restarts;   // it recovered on its own
       } catch { /* a dropped poll is harmless — the next catches up */ }
     }));
     renderScrapRuns(runs);
+    renderScrapTotals(runs, startedMs);     // new names land between clock ticks
   }, SCRAP_POLL_MS);
 
   // Every account runs concurrently through the one count-bounded endpoint; the
@@ -3230,26 +3530,60 @@ bind('#btn-scrap', '#out-scrap', async out => {
   const runAccount = async id => {
     const r = runs[id];
     const chip = $(`#scrap-accounts .acct-chip[data-acct="${id}"]`);
-    try {
-      const d = await api('/automation/scrape-batched',
-        { method: 'POST', body: { account_id: id, technique: r.tech, target_count: target, scrape_bio: true } });
-      addNames(id, d.usernames || d.names || []);
-      mergeBios(r.bioMap, d.profiles);   // catch any bio read after the last poll
-      r.saved += d.saved_records ?? 0;
-      r.bios += d.bios_saved ?? 0;
-      r.phase = 'done';
-      chip?.classList.remove('running'); chip?.classList.add('done');
-    } catch (error) {
-      r.error = error.message; r.phase = 'done';
-      chip?.classList.remove('running'); chip?.classList.add('failed');
+    // A page fault doesn't end this account: its window is refreshed and the
+    // scrape starts again from 0, up to SCRAP_AUTO_RESTARTS times. Names found
+    // before the fault are already saved to Data by the backend and stay listed
+    // here, so a restart costs time and never results.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const d = await api('/automation/scrape-batched',
+          { method: 'POST', body: { account_id: id, technique: r.tech, target_count: target, scrape_bio: true } });
+        addNames(id, d.usernames || d.names || []);
+        mergeBios(r.bioMap, d.profiles);   // catch any bio read after the last poll
+        r.saved += d.saved_records ?? 0;
+        r.bios += d.bios_saved ?? 0;
+        r.pageRestarts = d.restarts ?? r.pageRestarts;   // the backend's own restarts
+        r.endReason = d.end_reason || null;              // stopped | dry | target
+        r.error = null;
+        r.phase = 'done';
+        r.endedMs = Date.now();            // freeze this account's clock
+        chip?.classList.remove('running', 'failed'); chip?.classList.add('done');
+        break;
+      } catch (error) {
+        const message = error.message || String(error);
+        const canRetry = attempt < SCRAP_AUTO_RESTARTS
+                      && SCRAP_PAGE_FAULT_RE.test(message)
+                      && !(await runIsStopping());
+        if (!canRetry) {
+          r.error = message; r.phase = 'done'; r.restarting = false;
+          r.endedMs = Date.now();          // freeze this account's clock
+          chip?.classList.remove('running'); chip?.classList.add('failed');
+          break;
+        }
+        r.restarts += 1;
+        r.restarting = true;
+        r.lastError = message;
+        renderScrapRuns(runs);
+        toast(`${r.who}: ${message} — refreshing and scraping again from 0`, true);
+        // Reload the window so the next go starts on a page that works, then
+        // let it settle before asking the backend for another run.
+        try {
+          await api('/automation/refresh-window', { method: 'POST', body: { account_id: id } });
+        } catch { /* the backend reloads on its own too — press on regardless */ }
+        await new Promise(done => setTimeout(done, 2000));
+        r.restarting = false;
+      }
     }
     renderScrapRuns(runs);
   };
 
   await Promise.all(ids.map(runAccount));
   clearInterval(poll);
+  stopScrapClock();
   renderScrapRuns(runs);
+  renderScrapTotals(runs, startedMs, true);      // freeze the head on the totals
 
+  const ranFor = hhmmss((Date.now() - startedMs) / 1000);
   const bad = ids.filter(id => runs[id].error);
   const totalFound = ids.filter(id => !runs[id].error).reduce((n, id) => n + runs[id].names.length, 0);
   const totalSaved = ids.reduce((n, id) => n + runs[id].saved, 0);
@@ -3258,18 +3592,26 @@ bind('#btn-scrap', '#out-scrap', async out => {
   const lines = ids.map(id => {
     const r = runs[id];
     const found = r.target ? `${r.names.length}/${r.target}` : `${r.names.length}`;
-    return r.error ? `${r.who} (${techWord[r.tech]}): ${r.error}`
-                   : `${r.who} (${techWord[r.tech]}): ${found} found, ${r.saved} new, ${r.bios || 0} bios.`;
+    const back = (r.restarts || 0) + (r.pageRestarts || 0);
+    // Say when a window wedged and was restarted — a run that quietly recovered
+    // is still something worth knowing about.
+    const again = back ? ` (restarted ×${back} after a page failure)` : '';
+    const took = ` in ${hhmmss(runSeconds(r))}`;
+    // Why this account ended — the whole point of the line when the target was
+    // unlimited and it stopped anyway.
+    const why = r.endReason ? `\n    ↳ ended: ${END_REASON[r.endReason] || r.endReason}` : '';
+    return r.error ? `${r.who} (${techWord[r.tech]}): ${r.error}${again}`
+                   : `${r.who} (${techWord[r.tech]}): ${found} found, ${r.saved} new, ${r.bios || 0} bios${took}.${again}${why}`;
   });
 
   if (note) {
     note.className = bad.length ? 'banner' : 'banner good';
-    note.textContent = `${ids.length} window(s): found ${totalFound}, added ${totalSaved} new to Data, ${totalBios} bios → usernames_bio.json` +
+    note.textContent = `${ids.length} window(s) in ${ranFor}: found ${totalFound}, added ${totalSaved} new to Data, ${totalBios} bios → usernames_bio.json` +
                        (bad.length ? `. ${bad.length} failed.` : '.');
   }
-  show(out, `Scraped ${ids.length} window(s), target ${targetWord}/account.\n\n` + lines.join('\n') +
+  show(out, `Scraped ${ids.length} window(s) in ${ranFor}, target ${targetWord}/account.\n\n` + lines.join('\n') +
             `\n\nTotal: ${totalFound} found, ${totalSaved} new records added to Data, ${totalBios} bios saved to usernames_bio.json.`, bad.length > 0);
-  toast(`Scraped ${ids.length} window(s): +${totalSaved} names, ${totalBios} bios`, bad.length > 0);
+  toast(`Scraped ${ids.length} window(s) in ${ranFor}: +${totalSaved} names, ${totalBios} bios`, bad.length > 0);
   loadRecords();                   // the new names land in Data
 });
 

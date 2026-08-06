@@ -132,6 +132,7 @@
             <button type="button" data-sms-act="edit" role="menuitem">✎ Edit</button>
             <button type="button" data-sms-act="rename" role="menuitem">🏷 Rename</button>
             <button type="button" data-sms-act="update" role="menuitem">💾 Update</button>
+            <button type="button" data-sms-act="toggle" role="menuitem">🚫 Disable</button>
             <button type="button" data-sms-act="delete" class="danger" role="menuitem">🗑 Delete</button>
           </div>
         </section>
@@ -332,6 +333,7 @@
               <button type="button" data-sms-act="edit" role="menuitem">✎ Edit</button>
               <button type="button" data-sms-act="rename" role="menuitem">🏷 Rename</button>
               <button type="button" data-sms-act="update" role="menuitem">💾 Update</button>
+              <button type="button" data-sms-act="toggle" role="menuitem">🚫 Disable</button>
               <button type="button" data-sms-act="delete" class="danger" role="menuitem">🗑 Delete</button>
             </div>
           </div>
@@ -555,11 +557,16 @@
                     aria-label="About the Scrapping panel">i</button>Scrapping</h2>
         <!-- data-head-action keeps these out of the title box and parks them beside
              the >_ terminal button, which stays rightmost — see buildTerminal() in
-             app.js. Settings + its summary + the 🎯 target are run *configuration*,
-             so they belong up here; the two action buttons stay down in the body. -->
+             app.js. Settings + the live run total + the 🎯 target belong up here;
+             the two action buttons stay down in the body. -->
         <button class="icon-btn" id="btn-scrap-settings" type="button" data-head-action
                 title="Settings — batch range, pause and scroll pace">⚙️</button>
-        <span class="hint scrap-summary" id="scrap-summary" data-head-action>pause 2800-4200ms · step 45-75%</span>
+        <!-- The live run total: contacts scraped across every ticked account and
+             how long the scrape has been going. The configured pace it used to
+             echo (pause / step / batch) lives in the ⚙️ dialog, which is the only
+             place it can be changed — repeating it here said nothing useful. -->
+        <span class="hint scrap-summary" id="scrap-summary" data-head-action
+              title="Contacts scraped across every ticked account, and how long this scrape has been running.">not scraping</span>
         <label class="scrap-target-lbl" data-head-action
                title="Stop each account after it has scraped this many usernames. 0 = unlimited — keep going until the feed and search stop yielding new handles (or you press Stop).">
           🎯 <input type="number" id="scrap-target" min="0" step="50" value="0" placeholder="0" />

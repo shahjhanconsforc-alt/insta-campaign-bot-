@@ -373,6 +373,26 @@ async def scrape_batched(body: BatchScrapeBody | None = None):
         raise HTTPException(502, str(exc).split("\nCall log:")[0].strip()) from exc
 
 
+@router.post("/refresh-window")
+async def refresh_window(body: BatchScrapeBody | None = None):
+    """Reload one account's Chrome window onto a fresh Instagram home feed.
+
+    The Scrapping panel calls this between auto-restarts: when a run falls over
+    on a page fault (the sidebar wouldn't take a click, a navigation died), the
+    window is reloaded before the account is scraped again, so the retry starts
+    against a page that works rather than the one that just broke.
+    """
+    from backend.automation import visit as visitor
+
+    account_id = body.account_id if body else None
+    try:
+        return await visitor.refresh_window(account_id)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except PlaywrightError as exc:
+        raise _fail(exc) from exc
+
+
 @router.post("/scrape-profiles")
 async def scrape_profiles(body: BatchScrapeBody | None = None):
     """Profile-visiting scrape for one account: scroll the feed and, for each new

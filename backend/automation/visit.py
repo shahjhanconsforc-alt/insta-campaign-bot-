@@ -10,6 +10,8 @@ import sys
 import time
 from urllib.parse import urlparse
 
+from playwright.async_api import Error as PlaywrightError
+
 from backend import activity, config, control, sessions, settings
 from backend.automation import instagram as ig
 from backend.automation import playwright_runner as browser
@@ -154,22 +156,221 @@ def _is_home_page(page) -> bool:
         return False
 
 
+# ── Readiness polling: wait for the page, not the clock ──────────────────
+#
+# Every fixed `wait_for_timeout(2500)` in a scrape spends its FULL 2.5s on every
+# single step, whether the page was ready in 200ms or genuinely needed the lot.
+# Multiplied by a navigation per username, that blind waiting was where nearly
+# all of the scrape's wall-clock went. Polling a cheap JS predicate several
+# times a second instead returns the moment the page really is ready and only
+# spends the whole budget when the page really is slow — same reliability, a
+# fraction of the time.
+READY_POLL_MS = 90          # how often a readiness predicate is re-checked
+
+
+async def _wait_ready(page, predicate_js: str, cap_ms: int, floor_ms: int = 0,
+                      arg=None) -> bool:
+    """Poll `predicate_js` — a JS arrow returning truthy once the page is ready —
+    until it's true or `cap_ms` has passed. `floor_ms` is a small settle spent up
+    front regardless, so a page that reports ready instantly still gets a beat to
+    paint. `arg` is handed to the predicate, so a gate can be told WHAT it is
+    waiting for (a username, say) instead of settling for "something painted".
+    Returns True if the predicate came back truthy in time.
+
+    A failing evaluate (the page is mid-navigation) is not an answer — it just
+    means try again on the next poll.
+    """
+    if floor_ms > 0:
+        await page.wait_for_timeout(floor_ms)
+    end = time.monotonic() + max(0, cap_ms) / 1000
+    while True:
+        try:
+            if await page.evaluate(predicate_js, arg):
+                return True
+        except Exception:  # noqa: BLE001 — mid-navigation; the next poll retries
+            pass
+        if time.monotonic() >= end:
+            return False
+        await asyncio.sleep(READY_POLL_MS / 1000)
+
+
+# The home feed has painted once a post or a profile link is in the DOM.
+_FEED_READY_JS = """() => {
+  const main = document.querySelector('main') || document.body;
+  return !!main.querySelector('article, a[href^="/"] img, svg[aria-label="Home"]');
+}"""
+
+# The profile's own bio/category/link block. Instagram's class names are
+# obfuscated but the "_a…" family is stable across deploys, and each role has its
+# own discriminating pair:
+#     _aacy _aad6   the category line      ("Public figure")
+#     _aacx _aad7   the bio text           ("Husband to @feistylittlej …")
+#     _aacw _aada   the external link      ("www.livingr3.com and 2 more")
+# Match the CLASS, not the tag. Instagram ships the category as a <div>, the full
+# name as an <h1> carrying the category's own classes, the bio as a <span>, and
+# the link as a <div> inside a <button> — and it moves roles between elements
+# from deploy to deploy while the pairs stay put. `_aad7` alone identifies the
+# bio, so a tag-agnostic match on it survives the bio becoming a <div> tomorrow;
+# `span._aacx` stays as a second anchor and can't catch the link, which is a div.
+BIO_SEL = '._aad7[dir="auto"], span._aacx[dir="auto"]'
+# The category is a <div>; the <h1> beside it carries the SAME pair and holds the
+# full name, so the div/h1 split is what keeps those two apart.
+BIO_CATEGORY_SEL = 'div._aacy[dir="auto"], div._aad6[dir="auto"]'
+BIO_NAME_SEL = 'h1[dir="auto"]'
+# A single external link is an <a> through Instagram's redirector. TWO OR MORE
+# collapse into a <button> whose label reads "www.example.com and 2 more" — no
+# <a> anywhere — which is why `link` came back null on every multi-link profile.
+BIO_LINK_SEL = 'a[href*="l.instagram.com"], a[rel~="me"]'
+BIO_LINK_TEXT_SEL = 'div._aada[dir="auto"], div._aacw[dir="auto"]'
+BIO_THREADS_SEL = 'a[href*="threads.com/@"], a[href*="threads.net/@"]'
+
+# A profile is ready once the header it painted belongs to the username we asked
+# for — see the comment inside. Ceilings: the header itself, then a short second
+# look for the bio block, which paints a beat behind the stats.
+PROFILE_READY_CAP_MS = 8000
+PROFILE_BIO_SETTLE_MS = 1500
+
+_PROFILE_READY_JS = """(name) => {
+  // Ready means THIS profile has rendered — not merely that some chrome exists.
+  //
+  // Opening a profile from the feed or the search flyout is a CLIENT-SIDE
+  // navigation: the document we came FROM survives, and with it every <meta
+  // og:*> it carried, until Instagram gets round to swapping them. The old gate
+  // accepted any og:description longer than 10 characters, so on a click it fired
+  // against the FEED's meta immediately — before the profile had painted a single
+  // pixel — and the read that followed found no bio block at all. That is where
+  // the blank bios came from, and it is why every check below is tied to the
+  // username we asked for rather than to "something is on screen".
+  const low = (name || '').toLowerCase();
+  if (!low) return !!(document.querySelector('%BIO%') || document.querySelector('%CAT%'));
+  const path = location.pathname.replace(/^\\/+|\\/+$/g, '').toLowerCase();
+  if (path !== low) return false;                  // the URL hasn't turned over yet
+  const t = document.body ? document.body.innerText || '' : '';
+  // Private or gone is an answer too — there is nothing more to wait for.
+  if (/This\\s+account\\s+is\\s+private|Sorry, this page|isn't available/i.test(t)) return true;
+  // The stats row's own links carry the username, so finding it proves the header
+  // on screen is THIS profile's and not the one we were looking at a moment ago.
+  if (document.querySelector('a[href="/' + low + '/followers/"]')) return true;
+  // Same for the avatar, whose alt is "<name>'s profile picture".
+  for (const img of document.querySelectorAll('header img[alt], main img[alt]')) {
+    const alt = (img.getAttribute('alt') || '').toLowerCase();
+    if (alt.includes(low) && alt.includes('profile picture')) return true;
+  }
+  // And the og meta — but only once it names this account.
+  const og = document.querySelector('meta[property="og:description"]');
+  if (og && (og.getAttribute('content') || '').toLowerCase().includes('(@' + low + ')')) return true;
+  return false;
+}""".replace("%BIO%", BIO_SEL).replace("%CAT%", BIO_CATEGORY_SEL)
+
+# The header's stats paint a beat ahead of the bio block, so a read fired the
+# instant the gate above opens can still miss the bio on a slow profile. This is
+# a SHORT second look. An account with no bio, no category and no link is
+# perfectly ordinary, so it is a ceiling to spend, never a requirement to meet.
+_PROFILE_BIO_READY_JS = """() => !!(
+  document.querySelector('%BIO%') || document.querySelector('%CAT%')
+  || document.querySelector('%LINK%') || document.querySelector('%LINKTEXT%')
+)""".replace("%BIO%", BIO_SEL).replace("%CAT%", BIO_CATEGORY_SEL) \
+    .replace("%LINKTEXT%", BIO_LINK_TEXT_SEL).replace("%LINK%", BIO_LINK_SEL)
+
+# What the search flyout is showing right now: the usernames of every avatar'd
+# result row (the same shape _HARVEST_SEARCH_JS reads), plus whether Instagram is
+# still querying. The username list doubles as a FINGERPRINT — comparing it with
+# the one taken before typing is how _wait_search_results tells this seed's
+# results from the previous seed's, which stay on screen while the new query is
+# in flight.
+_SEARCH_RESULTS_JS = """() => {
+  const names = [];
+  for (const a of document.querySelectorAll('a[href^="/"]')) {
+    if (a.closest('nav')) continue;
+    if (!a.querySelector('img[alt*="profile picture" i]')) continue;
+    const p = (a.getAttribute('href') || '').split('?')[0].split('/').filter(Boolean);
+    if (p.length === 1) names.push(p[0].toLowerCase());
+  }
+  const busy = !!document.querySelector('svg[aria-label*="Loading" i]');
+  return { key: names.join(','), n: names.length, busy };
+}"""
+
+
+async def _search_results_key(page) -> str:
+    """Fingerprint of the results the search flyout is showing right now — take
+    it BEFORE typing a seed, hand it to _wait_search_results afterwards."""
+    try:
+        snap = await page.evaluate(_SEARCH_RESULTS_JS)
+    except Exception:  # noqa: BLE001 — no panel to read is an empty fingerprint
+        return ""
+    return str((snap or {}).get("key") or "")
+
+
+async def _type_search_seed(page, seed: str) -> None:
+    """Type a seed into the focused search box one character at a time at a
+    human, jittered pace. page.keyboard.type()'s own `delay` is a fixed metronome;
+    a real person's gaps between keys are uneven, and the difference is visible."""
+    for ch in seed:
+        await page.keyboard.type(ch)
+        await page.wait_for_timeout(random.uniform(*SEARCH_TYPE_DELAY_RANGE_MS))
+
+
+async def _wait_search_results(page, before: str, cap_ms: int | None = None) -> bool:
+    """Wait until the flyout holds the results for the seed just typed.
+
+    `before` is the fingerprint from _search_results_key taken before typing.
+    Instagram leaves the previous query's rows on screen while it fetches the new
+    ones, so "there are rows in the panel" is not an answer — "the rows CHANGED,
+    nothing is still loading, and they've stopped moving" is. Two identical reads
+    in a row is what makes the harvest that follows see the whole list rather than
+    its first arrival.
+
+    True once this seed's results are up. False if the seed genuinely returned
+    nothing, or the panel never turned over inside `cap_ms`.
+    """
+    await page.wait_for_timeout(SEARCH_DEBOUNCE_MS)   # Instagram hasn't even asked yet
+    now = time.monotonic()
+    end = now + max(0, SEARCH_SUGGEST_WAIT_MS if cap_ms is None else cap_ms) / 1000
+    empty_ok_at = now + SEARCH_EMPTY_MIN_S            # "no results" needs to settle too
+    stable, hits, empties = "", 0, 0
+    while True:
+        try:
+            snap = await page.evaluate(_SEARCH_RESULTS_JS) or {}
+        except Exception:  # noqa: BLE001 — mid-render; the next poll retries
+            snap = {}
+        key, count, busy = str(snap.get("key") or ""), snap.get("n") or 0, snap.get("busy")
+        if busy:
+            stable, hits, empties = "", 0, 0
+        elif count and key != before:
+            hits = hits + 1 if key == stable else 1
+            stable, empties = key, 0
+            if hits >= 2:
+                return True
+        elif not count and time.monotonic() >= empty_ok_at:
+            # The panel cleared and stayed cleared: this seed has no matches. Say
+            # so now instead of spending the whole ceiling on it.
+            empties += 1
+            stable, hits = "", 0
+            if empties >= 2:
+                return False
+        else:
+            stable, hits = "", 0
+        if time.monotonic() >= end:
+            return False
+        await asyncio.sleep(READY_POLL_MS / 1000)
+
+
 async def _ensure_home(page) -> None:
     """Make sure the visible page is the Instagram home feed."""
     if not _on_instagram(page):
         activity.log("visit", "Window is not on Instagram - opening Home", "warn")
         await page.goto(HOME, wait_until="domcontentloaded")
-        await page.wait_for_timeout(2500)
+        await _wait_ready(page, _FEED_READY_JS, 2500)
         return
 
     if not _is_home_page(page):
         activity.log("visit", "Instagram window is on another page - returning Home", "warn")
         await page.goto(HOME, wait_until="domcontentloaded")
-        await page.wait_for_timeout(2500)
+        await _wait_ready(page, _FEED_READY_JS, 2500)
         return
 
     await page.evaluate("window.scrollTo(0, 0)")
-    await page.wait_for_timeout(700)
+    await page.wait_for_timeout(250)
 
 
 async def _collect_visible_usernames(page) -> list[str]:
@@ -226,9 +427,12 @@ def _add_names(seen: set[str], names: list[str], batch: list[str]) -> None:
         names.append(name)
 
 
-# How the scroll handles the bottom of the feed and a stuck page.
-BOTTOM_WAIT_S = 4.0        # at the bottom, wait this long for new posts to load
-BOTTOM_POLL_S = 0.5
+# How the scroll handles the bottom of the feed and a stuck page. The wait is a
+# CEILING, not a fixed cost: _wait_for_growth returns the instant the page grows,
+# so a quick poll here means a normal lazy-load costs a few hundred ms and only a
+# genuinely dead bottom spends the whole budget.
+BOTTOM_WAIT_S = 3.0        # at the bottom, wait UP TO this long for new posts
+BOTTOM_POLL_S = 0.2
 STUCK_RELOADS_AT = 3       # this many no-growth bottoms in a row = stuck -> refresh
 
 # Human-like backtracking: a real reader scrolls down a while, then flicks back up
@@ -236,6 +440,48 @@ STUCK_RELOADS_AT = 3       # this many no-growth bottoms in a row = stuck -> ref
 # scroll glides UP one or two steps (no refresh), then carries on down.
 BACKSCROLL_EVERY = 5              # back-scroll once per this many forward steps
 BACKSCROLL_STEPS = (1, 2)         # glide back one or two steps, picked at random
+
+# The batched scrape's stall guard: how many steps in a row may add nothing new
+# before a batch is abandoned, and how many whole batches may add nothing before
+# the run ends as "dried up".
+#
+# Each idle batch now REVIVES its surface first (reloads the feed / reopens
+# Search — see on_revive), so these count "tried to recover and still got
+# nothing", not plain bad luck. That is why they are higher than the 8/3 they
+# replace: back then an idle batch was simply written off, and an unlimited run
+# ended the moment the feed hit its bottom, however much a reload would have
+# served up.
+SCRAPE_IDLE_STEPS = 12
+SCRAPE_IDLE_BATCHES = 5
+
+# Search-burst pacing.
+#
+# This used to type at a flat 40ms per character — a 1-5 character seed was in
+# the box inside 200ms — and then call the panel "ready" as soon as it held ANY
+# avatar'd result row. From round two on, those rows are the PREVIOUS seed's
+# results, which stay on screen the whole time Instagram is querying the new one.
+# So the gate opened instantly on stale rows, the harvest re-read names it
+# already had, and the next round fired at once: type, clear, type, clear, five
+# or six bursts a second, with the occasional one landing late enough to catch a
+# genuine refresh. That is the "writes random letters very fast, then one shows
+# results" behaviour.
+#
+# Both halves are fixed: a human, jittered per-character delay, and a gate that
+# waits for results belonging to THIS seed (see _wait_search_results).
+SEARCH_TYPE_DELAY_MS = 40            # Actions' Search+Follow — one deliberate query
+SEARCH_TYPE_DELAY_RANGE_MS = (110, 240)   # per character, jittered — the harvest
+SEARCH_PRETYPE_PAUSE_S = (0.25, 0.6)      # beat between clearing the box and typing
+SEARCH_READ_PAUSE_S = (0.7, 1.6)          # dwell over the results before the next seed
+SEARCH_SUGGEST_WAIT_MS = 5000        # ceiling for THIS seed's results to land
+SEARCH_DEBOUNCE_MS = 350             # Instagram's own debounce before it even asks
+SEARCH_EMPTY_MIN_S = 1.2             # before believing "this seed has no results"
+PANEL_SETTLE_MS = 120             # the beat after an Escape, for the flyout to fold away
+
+# Bio mode dwells on each profile it opens for a moment before moving on, so the
+# visits aren't machine-gun-regular. This is deliberately its OWN short range and
+# not the scroll pause: the pause knob sets the rhythm of SCROLLING, and reusing
+# it here charged every profile a second dwell on top of the page's own load.
+BIO_DWELL_RANGE = (0.15, 0.45)    # seconds
 
 
 async def _refresh_feed(page) -> None:
@@ -248,7 +494,8 @@ async def _refresh_feed(page) -> None:
             await page.goto(HOME, wait_until="domcontentloaded")
         except Exception:  # noqa: BLE001
             pass
-    await page.wait_for_timeout(2500)
+    # Up to 2.5s, but back the moment the feed has posts in it.
+    await _wait_ready(page, _FEED_READY_JS, 2500)
 
 
 async def _wait_for_growth(page, prev_height: float, deadline: float) -> bool:
@@ -518,11 +765,25 @@ async def visit_home_feed(
 # it is unit-testable with fake collectors; scrape_both_batched wires the real
 # page steps into it.
 
+async def refresh_window(account_id: int | None = None) -> dict:
+    """Reload one account's window back onto a fresh Instagram home feed.
+
+    The Scrapping panel calls this before restarting an account whose run fell
+    over: a wedged page is nearly always what broke it, and starting a new run
+    against that same wedged page just breaks it the same way.
+    """
+    page = account_page(account_id)
+    await _ensure_home(page)
+    await _refresh_feed(page)
+    return {"url": page.url, "account_id": account_id}
+
+
 async def _run_batched(*, names, seen, target, bmin, bmax,
                        start_technique, switch_enabled,
-                       on_scroll, on_search, on_switch=None,
+                       on_scroll, on_search, on_switch=None, on_revive=None,
                        delay_min=0.0, delay_max=0.0, on_pause=None,
-                       progress=None, max_idle_steps=8, max_idle_batches=3):
+                       progress=None, max_idle_steps=SCRAPE_IDLE_STEPS,
+                       max_idle_batches=SCRAPE_IDLE_BATCHES):
     """Collect until `target` unique names land (or Stop) — no time limit.
 
     `target <= 0` means UNLIMITED: keep collecting for as long as the surfaces keep
@@ -541,6 +802,16 @@ async def _run_batched(*, names, seen, target, bmin, bmax,
     idle_batches = 0
     unlimited = target <= 0
     goal_label = "∞" if unlimited else str(target)
+
+    def _ended(reason: str) -> None:
+        """Record WHY the loop is ending. An unlimited run that finishes looks
+        identical from outside whether Stop was pressed or the surfaces dried
+        up — and "why did it stop?" is unanswerable after the fact, because the
+        activity log is in memory only. So the reason rides the progress state
+        and comes back with the result."""
+        if progress is not None:
+            progress.update(end_reason=reason)
+
     while unlimited or len(names) < target:
         batch = random.randint(bmin, bmax)
         batch_goal = len(names) + batch if unlimited else min(len(names) + batch, target)
@@ -557,6 +828,7 @@ async def _run_batched(*, names, seen, target, bmin, bmax,
             try:
                 await control.checkpoint()          # Stop/Pause land between steps
             except control.Stopped:
+                _ended("stopped")
                 return True
             before = len(names)
             _add_names(seen, names, await step() or [])
@@ -571,13 +843,36 @@ async def _run_batched(*, names, seen, target, bmin, bmax,
         # enough empty batches in a row means the names have dried up — stop.
         if len(names) == batch_start:
             idle_batches += 1
+            # …but first, REVIVE the surface. A home feed scrolled to its bottom
+            # keeps serving the same posts forever — only a reload makes Instagram
+            # rank a fresh set — and a Search panel typed into all run starts
+            # repeating its suggestions. Without this an unlimited run ended the
+            # moment the feed bottomed out, which looked like "the feed dried up"
+            # when it had simply never been asked for more.
+            if on_revive is not None and idle_batches < max_idle_batches:
+                activity.log(
+                    "visit",
+                    f"Nothing new this batch — reloading {technique} and trying again "
+                    f"({idle_batches}/{max_idle_batches})", "warn")
+                try:
+                    await on_revive(technique)
+                except control.Stopped:
+                    _ended("stopped")
+                    return True
+                except Exception as exc:  # noqa: BLE001 — a failed revive costs this go only
+                    activity.log("visit", f"Couldn't reload {technique}: {exc}", "warn")
             if idle_batches >= max_idle_batches:
-                activity.log("visit", "No new names for several batches — stopping", "warn")
+                activity.log(
+                    "visit",
+                    f"No new names for {max_idle_batches} batches, even after reloading "
+                    f"— stopping", "warn")
+                _ended("dry")
                 return False
         else:
             idle_batches = 0
 
         if not unlimited and len(names) >= target:
+            _ended("target")
             break
 
         # Pause between batches: stop for a random spell before the next one.
@@ -592,15 +887,46 @@ async def _run_batched(*, names, seen, target, bmin, bmax,
                     try:
                         await on_pause(wait)
                     except control.Stopped:
+                        _ended("stopped")
                         return True
 
-        # Switch technique for 'both'; single-technique runs stay put.
+        # Switch technique for 'both'; single-technique runs stay put. A switch
+        # that can't be made (the Search flyout won't open, say) is NOT fatal: we
+        # stay on the technique that is currently working and try again after the
+        # next batch, rather than flipping to a surface that isn't there.
         if switch_enabled:
             nxt = "search" if technique == "scroll" else "scroll"
+            switched = True
             if on_switch is not None:
-                await on_switch(technique, nxt)
-            technique = nxt
+                try:
+                    switched = (await on_switch(technique, nxt)) is not False
+                except control.Stopped:
+                    _ended("stopped")
+                    return True
+                except Exception as exc:  # noqa: BLE001
+                    activity.log("visit",
+                                 f"Couldn't switch to {nxt} ({exc}) — staying on {technique}",
+                                 "warn")
+                    switched = False
+            if switched:
+                technique = nxt
+    _ended("target")            # the while condition ran out — the count was met
     return False
+
+
+# Auto-restart: a wedged window — the classic being "Locator.click: Timeout
+# 5000ms exceeded" when the Search rail won't take a click — used to end an
+# account's whole run with a red "failed —" on its card. Instead the scrape saves
+# what it has collected, reloads the window, and starts that account over from
+# zero, up to this many times before it finally gives up and reports the error.
+SCRAPE_MAX_AUTO_RESTARTS = 5
+
+
+class PageWedged(RuntimeError):
+    """The window is stuck in a way a reload fixes. Raised where the scrape knows
+    the page — not the request — is what went wrong, so the restart loop below
+    treats it like a Playwright fault instead of a real answer such as "this
+    window isn't logged in", which restarting could never fix."""
 
 
 async def scrape_batched(account_id: int | None = None, technique: str = "both",
@@ -666,6 +992,12 @@ async def scrape_batched(account_id: int | None = None, technique: str = "both",
         "technique": start_tech, "batch_target": 0, "batch_start": 0,
         "target": target, "mode": mode, "pause_left": 0, "seeds": seeds,
         "bios_saved": 0, "profiles": profiles,
+        # Bumped each time a wedged window sends this account back to 0, so the
+        # panel can show "restarted x2" rather than looking like it stalled.
+        "restarts": 0, "restarting": False, "last_error": None,
+        # Why the run ended: 'stopped' (the Stop button), 'dry' (the stall guard —
+        # no new names for several batches) or 'target' (the count was reached).
+        "end_reason": None,
     }
     prog = _progress[account_id]
 
@@ -698,6 +1030,13 @@ async def scrape_batched(account_id: int | None = None, technique: str = "both",
             fresh = [n for n in collected
                      if n.lower() not in seen and n.lower() != self_lower]
             if fresh:
+                # Bank the names BEFORE opening any of them. One scroll step can
+                # surface 20-30 faces and each costs a real navigation to read, so
+                # the visiting runs for a minute or more — and until this step
+                # returned, _run_batched had added nothing, leaving every account
+                # card reading "· 0" throughout. Counting them now means the list
+                # fills at once and each bio drops in underneath as it is read.
+                _add_names(seen, names, fresh)
                 prog["bios_saved"] = prog.get("bios_saved", 0) + await _visit_profiles_and_store(
                     page, fresh, pause_range=pause_range,
                     restore=lambda: _return_to_feed(page), sink=profiles)
@@ -715,53 +1054,74 @@ async def scrape_batched(account_id: int | None = None, technique: str = "both",
 
     async def on_search():
         # one search burst (a random-shaped seed), harvest its suggestions
+        # Fingerprint what's on screen BEFORE clearing: whatever the panel shows
+        # while the new query is in flight is THIS, and mistaking it for the new
+        # seed's results is what made the bursts fire back to back.
+        before = await _search_results_key(page)
         try:
             await page.keyboard.press("ControlOrMeta+a")
             await page.keyboard.press("Delete")
         except Exception:  # noqa: BLE001
             pass
+        await page.wait_for_timeout(random.uniform(*SEARCH_PRETYPE_PAUSE_S) * 1000)
         seed = _random_search_seed()                # a random one of nine shapes
-        await page.keyboard.type(seed, delay=90)
+        await _type_search_seed(page, seed)         # human pace, not 40ms/char
         seeds.append(seed)
         prog.update(seed=seed)
-        await control.sleep(1.4)                    # let suggestions land
-        try:
-            found = await page.evaluate(
-                _HARVEST_SEARCH_JS, {"reserved": sorted(RESERVED_PATHS), "self": self_name})
-        except Exception:  # noqa: BLE001 — a bad burst mustn't end the run
-            found = []
+        # Wait for THIS seed's suggestions — the panel changing, settling, and no
+        # spinner — not merely for rows to be present. Back in ~600ms on a normal
+        # burst; the ceiling is only spent when Instagram is genuinely slow.
+        landed = await _wait_search_results(page, before)
+        # Nothing of this seed's own arrived, so whatever is in the panel belongs
+        # to the last burst — harvesting it would only re-count names we already
+        # have. Take the empty result and let the next seed try.
+        found = []
+        if landed:
+            try:
+                found = await page.evaluate(
+                    _HARVEST_SEARCH_JS, {"reserved": sorted(RESERVED_PATHS), "self": self_name})
+            except Exception:  # noqa: BLE001 — a bad burst mustn't end the run
+                found = []
+        # Read the results the way a person would before typing the next thing.
+        await page.wait_for_timeout(random.uniform(*SEARCH_READ_PAUSE_S) * 1000)
+
         # Bio mode: open each NEW suggestion's profile for its bio →
         # usernames_bio.json, then reopen the Search panel so the next burst can
         # type into it again (visiting a profile navigates away and closes it).
+        #
+        # This reopen is load-bearing in a way scroll's is not. Scroll gets its
+        # surface back with go_back() — cheap and reliable. Search has to re-click
+        # the sidebar rail, FROM a profile page, and that is the flaky click
+        # _open_search_panel_resilient exists to fight. If it loses, the next burst
+        # types into nothing, harvests nothing, and the stall guard reports "the
+        # names dried up" — which is a lie, and the reason search-with-bios looked
+        # like it collected far less than scroll-with-bios.
         if scrape_bio:
             fresh = [n for n in found
                      if n.lower() not in seen and n.lower() != self_lower]
             if fresh:
+                _add_names(seen, names, fresh)   # count them now, not a minute later
                 prog["bios_saved"] = prog.get("bios_saved", 0) + await _visit_profiles_and_store(
                     page, fresh, pause_range=pause_range, sink=profiles)
-                try:
-                    await _open_search_panel()
-                except Exception:  # noqa: BLE001 — a failed reopen is retried next burst
-                    pass
+                # Note the result: _open_search_panel returns False, it does not
+                # raise, so the old bare try/except could never have caught this.
+                if not await _open_search_panel():
+                    prog.update(last_error="Search panel lost after reading bios")
+                    activity.log(
+                        "visit",
+                        f"Read {len(fresh)} bio(s) but the Search panel didn't reopen — "
+                        "the next burst has nowhere to type. Reviving the surface.",
+                        "warn")
+                    # Don't hand back an empty burst and let the stall guard call it
+                    # dry: rebuild the surface now, while we still know why it broke.
+                    await on_revive("search")
         tick()
         return found
 
-    async def _open_search_panel():
-        icon = page.locator(SIDEBAR_SEARCH_SEL).first
-        await icon.wait_for(state="visible", timeout=8000)
-        link = icon.locator("xpath=ancestor::a[1]")
-        clicker = link if await link.count() else icon
-        try:
-            await clicker.click(timeout=5000)
-        except Exception:  # noqa: BLE001
-            await icon.click(timeout=5000)
-        await page.wait_for_timeout(1200)           # let the panel slide open
-        box = page.locator(SEARCH_PANEL_INPUT_SEL).first
-        await box.wait_for(state="visible", timeout=8000)
-        try:
-            await box.click(timeout=4000)
-        except Exception:  # noqa: BLE001
-            await box.focus()
+    async def _open_search_panel() -> bool:
+        # Retries with a feed reload between goes, so a rail that won't take a
+        # click doesn't end the run — see _open_search_panel_resilient.
+        return await _open_search_panel_resilient(page)
 
     async def _close_search_panel():
         # Escape (twice: clear text, then collapse the flyout) returns to the feed
@@ -771,14 +1131,33 @@ async def scrape_batched(account_id: int | None = None, technique: str = "both",
                 await page.keyboard.press("Escape")
             except Exception:  # noqa: BLE001
                 pass
-            await page.wait_for_timeout(300)
-        await page.wait_for_timeout(300)
+            await page.wait_for_timeout(PANEL_SETTLE_MS)
 
-    async def on_switch(_frm, to):
+    async def on_switch(_frm, to) -> bool:
+        """Flip the surface. Returns False if it couldn't — the caller then STAYS
+        on the technique that is working rather than switching to a dead one."""
         if to == "search":
-            await _open_search_panel()
-        else:
+            return await _open_search_panel()
+        await _close_search_panel()
+        return True
+
+    async def on_revive(tech) -> None:
+        """The current surface has stopped yielding — reload it.
+
+        Scrolling reaches the bottom of the home feed and every further step then
+        shows the SAME posts: Instagram only ranks a fresh set on a reload. The
+        Search panel goes the same way, its suggestions narrowing to the handful
+        of accounts this session keeps landing on. Reloading gives both something
+        new to hand over, so an unlimited run keeps collecting instead of ending
+        the first time its feed runs out.
+        """
+        if tech == "search":
             await _close_search_panel()
+            await _refresh_feed(page)
+            await _open_search_panel()      # logs + retries internally
+        else:
+            await _refresh_feed(page)
+        fwd_steps[0] = 0                    # a reload puts us back at the top
 
     async def on_pause(seconds):
         # Idle for `seconds`, counting the pause down in progress, Stop-responsive.
@@ -791,19 +1170,87 @@ async def scrape_batched(account_id: int | None = None, technique: str = "both",
             await control.sleep(min(0.5, max(0.0, left)))
         prog.update(pause_left=0)
 
-    # Prepare the starting surface: a fresh feed to scroll, or the open Search panel.
-    if mode in ("scroll", "both"):
+    async def _prepare_surface() -> None:
+        """Put the window on the surface this attempt starts from: a freshly
+        reloaded feed, plus the Search panel open if that's the starting
+        technique. Every attempt — the first and every restart — begins here, so
+        a restart genuinely starts from the top of a clean page."""
         await _refresh_feed(page)
-    else:                                           # search-only
-        await _open_search_panel()
+        if mode == "search":                        # search-only starts in the panel
+            if not await _open_search_panel():
+                raise PageWedged(
+                    "Couldn't open Instagram's Search panel in this window — the "
+                    "sidebar Search button never took a click."
+                )
+
+    def _salvage() -> int:
+        """Persist what this attempt collected before the counters go back to
+        zero, so a restart costs time and never names."""
+        if not names:
+            return 0
+        kept = len(names)
+        try:
+            from backend import db
+
+            db.record_scraped_usernames(list(reversed(names)))
+        except Exception as exc:  # noqa: BLE001 — a save hiccup mustn't block the restart
+            activity.log("visit", f"Couldn't save names before restarting: {exc}", "warn")
+        return kept
 
     stopped = False
+    restarts = 0
+    salvaged = 0
     try:
-        stopped = await _run_batched(
-            names=names, seen=seen, target=target, bmin=bmin, bmax=bmax,
-            start_technique=start_tech, switch_enabled=(mode == "both"),
-            on_scroll=on_scroll, on_search=on_search, on_switch=on_switch,
-            delay_min=dmin, delay_max=dmax, on_pause=on_pause, progress=prog)
+        while True:
+            try:
+                await _prepare_surface()
+                stopped = await _run_batched(
+                    names=names, seen=seen, target=target, bmin=bmin, bmax=bmax,
+                    start_technique=start_tech, switch_enabled=(mode == "both"),
+                    on_scroll=on_scroll, on_search=on_search, on_switch=on_switch,
+                    on_revive=on_revive, delay_min=dmin, delay_max=dmax,
+                    on_pause=on_pause, progress=prog)
+                break
+            except control.Stopped:                 # Stop is an answer, not a fault
+                stopped = True
+                break
+            except (PlaywrightError, PageWedged) as exc:
+                # A page-level fault: a click that timed out, a navigation that
+                # died, a window that wedged. Recoverable — reload and start over.
+                if control.stopping():              # Stop won the race; don't restart
+                    stopped = True
+                    break
+                if restarts >= SCRAPE_MAX_AUTO_RESTARTS:
+                    activity.log(
+                        "visit",
+                        f"Scrape gave up after {restarts} restart(s): {_one_line(exc)}",
+                        "error")
+                    raise
+                restarts += 1
+                salvaged += _salvage()
+                activity.log(
+                    "visit",
+                    f"Scrape hit '{_one_line(exc)}' — kept {salvaged} name(s) so far, "
+                    f"refreshing the window and starting this account again from 0 "
+                    f"(restart {restarts}/{SCRAPE_MAX_AUTO_RESTARTS})",
+                    "warn")
+                # Back to zero, IN PLACE: the progress dict holds these very lists
+                # by reference, so rebinding them would leave the panel polling the
+                # old ones forever. `bios_saved` is deliberately NOT reset — those
+                # bios are already written to usernames_bio.json and the tally is
+                # of what was saved, not of progress toward the target.
+                names.clear()
+                seen.clear()
+                seeds.clear()
+                profiles.clear()
+                prog.update(restarts=restarts, restarting=True, technique=start_tech,
+                            batch_target=0, batch_start=0, pause_left=0,
+                            last_error=_one_line(exc))
+                try:
+                    await _close_search_panel()     # never restart with it over the feed
+                except Exception:  # noqa: BLE001
+                    pass
+                prog.update(restarting=False)
     finally:
         if mode in ("search", "both"):
             try:
@@ -814,10 +1261,17 @@ async def scrape_batched(account_id: int | None = None, technique: str = "both",
 
     elapsed = round(time.monotonic() - started, 1)
     bios_saved = prog.get("bios_saved", 0)
+    # 'stopped' always wins: a Stop pressed while the loop was mid-batch ends it
+    # before any other reason can be recorded.
+    end_reason = "stopped" if stopped else (prog.get("end_reason") or "dry")
+    why = {"stopped": "stopped by the Stop button",
+           "dry": "no new names for several batches — the surfaces dried up",
+           "target": "reached its target count"}[end_reason]
     activity.log(
         "visit",
-        f"Scrape ({mode}) {'stopped' if stopped else 'done'}: "
+        f"Scrape ({mode}) ended — {why}: "
         f"{len(names)}{'' if target <= 0 else f'/{target}'} name(s)"
+        + (f" (+{salvaged} kept from {restarts} restart(s))" if restarts else "")
         + (f", {bios_saved} bio(s) → usernames_bio.json" if scrape_bio else ""),
         "ok",
     )
@@ -826,6 +1280,12 @@ async def scrape_batched(account_id: int | None = None, technique: str = "both",
         "names": names, "usernames": names, "seeds": seeds,
         "target": target, "mode": mode, "stopped": stopped,
         "bios_saved": bios_saved, "profiles": profiles,
+        # How many times a wedged window sent this account back to 0, and how many
+        # names were saved before those restarts — so the panel can say so.
+        "restarts": restarts, "salvaged": salvaged,
+        # Why this run ended: 'stopped' | 'dry' | 'target'. Without it an
+        # unlimited run that was Stopped and one that dried up read identically.
+        "end_reason": end_reason,
     }
 
 
@@ -891,7 +1351,11 @@ _PROFILE_DATA_JS = """(name) => {
     if (following == null) { const m = c.match(/([\\d.,KMB]+)\\s+Following/i); if (m) following = parseNum(m[1]); }
     if (posts == null)     { const m = c.match(/([\\d.,KMB]+)\\s+Posts/i);     if (m) posts = parseNum(m[1]); }
     const dash = c.indexOf(' - ');
-    const tail = dash >= 0 ? c.slice(dash + 3) : c;
+    // Instagram's own lead-in sits between the counts and the name on the
+    // current format ("… Posts - See Instagram photos and videos from David J
+    // Harris Jr (@davidjharrisjr)"). Left in, it became part of every full_name.
+    const tail = (dash >= 0 ? c.slice(dash + 3) : c)
+      .replace(/^See\\s+Instagram\\s+photos\\s+and\\s+videos\\s+from\\s+/i, '');
     const nm = tail.match(/^(.*?)\\s*\\(@[^)]+\\)/);
     if (nm) fullName = nm[1].trim() || null;
     const bm = tail.match(/on Instagram:\\s*["\\u201c]?([\\s\\S]*?)["\\u201d]?\\s*$/i);
@@ -917,8 +1381,54 @@ _PROFILE_DATA_JS = """(name) => {
       .split('\\n').map(s => s.trim()).join('\\n').replace(/\\n{3,}/g, '\\n\\n').trim();
     return t.replace(/\\s*[…\\.]{1,3}\\s*more$/i, '').trim();   // drop the expander's trailing "… more"
   };
+  // The full name also lives in the header's <h1>, which carries the CATEGORY's
+  // own classes (they differ only by tag). og:title is the first fallback; this
+  // is the second, for a client-side navigation where the meta hasn't been
+  // swapped yet. Plenty of profiles leave it blank, which is an answer too.
+  if (!fullName) {
+    const h1 = document.querySelector('%NAME%');
+    if (h1) {
+      const t = brText(h1);
+      if (t && t.toLowerCase() !== (name || '').toLowerCase()) fullName = t;
+    }
+  }
   const uname = (name || '').toLowerCase();
   const nameLow = (fullName || '').toLowerCase();
+
+  // Instagram's own chrome, which is NOT a bio. Every one of these was landing in
+  // usernames_bio as though it were: "Messages" is the DM button's label and
+  // "444 posts" is the stats line, and on a half-painted profile they were the
+  // only <span dir="auto"> on the page, so the scoring fallback returned them.
+  // A read that matches one of these yields null — an empty bio is the truth, and
+  // the row can be re-scraped later; a fake bio is silently wrong forever.
+  const CHROME = /^(?:\\d[\\d,.\\s]*(?:posts?|followers?|following)|messages?|message|follow(?:ing|ers|ed)?|edit profile|view profile|profile|contact|email|call|shop|share|discover people|suggested for you|note\\.\\.\\.|you'?ve been on instagram.*)$/i;
+  const isChrome = (t) => !t || CHROME.test(t.trim());
+
+  // 1. The bio's own element, matched by class. This is the whole fix: the block
+  //    below is a fallback for when Instagram rotates these classes, not the
+  //    primary path.
+  const readBio = () => {
+    const spans = Array.from(document.querySelectorAll('%BIO%'));
+    // The "… more" expander nests a second element of the same class inside the
+    // first, so prefer the OUTERMOST — it holds the full text either way.
+    const outer = spans.filter(s => !spans.some(o => o !== s && o.contains(s)));
+    for (const span of outer) {
+      if (span.closest('nav') || span.closest('ul')) continue;
+      // The selector is tag-agnostic on purpose (Instagram moves these roles
+      // between <span> and <div>), so rule out the two neighbours that share
+      // part of the class list: the category line and the link label.
+      if (span.matches('%CAT%') || span.matches('%LINKTEXT%')) continue;
+      if (span.closest('button')) continue;              // the link button's own label
+      const t = brText(span);
+      if (!t || isChrome(t)) continue;
+      const low = t.toLowerCase();
+      if (low === uname || low === '@' + uname) continue;
+      if (nameLow && low === nameLow) continue;
+      return t;
+    }
+    return null;
+  };
+
   const findBio = (scope) => {
     let best = null, bestScore = -1;
     for (const span of scope.querySelectorAll('span[dir="auto"]')) {
@@ -930,6 +1440,7 @@ _PROFILE_DATA_JS = """(name) => {
       const low = t.toLowerCase();
       if (low === uname || low === '@' + uname) continue;    // the bare username
       if (nameLow && low === nameLow) continue;              // the full-name line
+      if (isChrome(t)) continue;                             // a button/stat label
       const html = span.innerHTML || '';
       const score = t.length
         + (/<br/i.test(html) ? 1000 : 0)                     // multi-line ⇒ almost surely the bio
@@ -939,13 +1450,61 @@ _PROFILE_DATA_JS = """(name) => {
     }
     return best;
   };
-  let domBio = findBio(header);
+  // Class-matched first; the scoring heuristic only as a fallback.
+  let domBio = readBio();
+  if (!domBio) domBio = findBio(header);
   if (!domBio) { const main = document.querySelector('main'); if (main) domBio = findBio(main); }
 
-  const bio = domBio || metaBio;
-  return { full_name: fullName, bio, followers, following, posts,
+  // The category line ("Artist", "Digital creator", "Clothing (Brand)") — a
+  // label Instagram itself assigns, so it is worth keeping alongside the bio.
+  let category = null;
+  const catEl = document.querySelector('%CAT%');
+  if (catEl) { const t = brText(catEl); if (t && !isChrome(t)) category = t; }
+
+  // The profile's external link, unwrapped from Instagram's l.instagram.com
+  // redirector so it stores as the real destination.
+  let link = null, links_more = 0;
+  const a = document.querySelector('%LINK%');
+  if (a && a.href) {
+    try {
+      const u = new URL(a.href);
+      const target = u.searchParams.get('u');
+      link = target ? decodeURIComponent(target).split('?')[0] : a.href;
+    } catch (e) { link = a.href; }
+  }
+  // TWO OR MORE links don't render an <a> at all: they collapse into a <button>
+  // labelled "www.example.com and 2 more" that opens a modal. The label is then
+  // the only place the link exists on the page, so read it — and keep the count
+  // of the ones behind the modal, which is a fact about the profile in itself.
+  if (!link) {
+    const el = document.querySelector('%LINKTEXT%');
+    if (el) {
+      let t = brText(el);
+      const m = t.match(/^(.*?)\\s+and\\s+(\\d+)\\s+more$/i);
+      if (m) { t = m[1].trim(); links_more = parseInt(m[2], 10) || 0; }
+      if (t && /^(?:https?:\\/\\/)?[\\w-]+(?:\\.[\\w-]+)+(?:[\\/?#]|$)/i.test(t)) {
+        link = /^https?:\\/\\//i.test(t) ? t : 'https://' + t;
+      }
+    }
+  }
+
+  // The Threads handle Instagram links beside the bio — same person, and it is
+  // right there on the page.
+  let threads = null;
+  const th = document.querySelector('%THREADS%');
+  if (th) {
+    const m = (th.getAttribute('href') || '').match(/threads\\.(?:com|net)\\/@([\\w.]+)/i);
+    if (m) threads = m[1];
+  }
+
+  let bio = domBio || metaBio;
+  if (isChrome(bio)) bio = null;          // never hand back chrome as a bio
+  return { full_name: fullName, bio, category, link, links_more, threads,
+           followers, following, posts,
            verified, private: isPrivate, url: location.href };
-}"""
+}""".replace("%BIO%", BIO_SEL).replace("%CAT%", BIO_CATEGORY_SEL) \
+    .replace("%NAME%", BIO_NAME_SEL).replace("%LINKTEXT%", BIO_LINK_TEXT_SEL) \
+    .replace("%LINK%", BIO_LINK_SEL).replace("%THREADS%", BIO_THREADS_SEL)
 
 
 async def _feed_scroll_step(page, step_range, pause_range) -> None:
@@ -1010,15 +1569,43 @@ async def _open_profile_and_collect(page, name: str) -> dict | None:
             activity.log("visit", f"Couldn't open @{name}'s profile", "warn")
             return None
 
-    await page.wait_for_timeout(2600)               # let the profile render
+    # Let the profile render. The gate is tied to `name`, so it cannot open on
+    # the page we came from — which is exactly what the old og-meta gate did on a
+    # client-side navigation, handing the reader a feed with no bio on it. It
+    # still returns the moment THIS profile's header is up (usually a few hundred
+    # ms) and only spends the ceiling on a genuinely slow one.
+    ready = await _wait_ready(page, _PROFILE_READY_JS, PROFILE_READY_CAP_MS,
+                              floor_ms=120, arg=name)
+    if not ready:
+        # Either the click didn't actually navigate (Instagram swallows one now
+        # and then, and the old code called that "opened") or the profile is
+        # slow. Go straight to the URL and give it one more go.
+        try:
+            await page.goto(f"{HOME}{name}/", wait_until="domcontentloaded")
+        except Exception:  # noqa: BLE001
+            pass
+        ready = await _wait_ready(page, _PROFILE_READY_JS, PROFILE_READY_CAP_MS, arg=name)
+    if ready:
+        # The stats row paints a beat ahead of the bio block, so give the bio its
+        # own short look-in before reading. No bio is a legitimate answer, hence a
+        # ceiling rather than a requirement.
+        await _wait_ready(page, _PROFILE_BIO_READY_JS, PROFILE_BIO_SETTLE_MS)
+    else:
+        activity.log("visit", f"@{name}'s profile didn't finish loading — "
+                              "reading whatever is there", "warn")
     try:
         data = await page.evaluate(_PROFILE_DATA_JS, name)
     except Exception:  # noqa: BLE001 — a bad read mustn't sink the whole run
         data = {}
     data = {"username": name, **(data or {})}
     followers = data.get("followers")
-    activity.log("visit", f"Opened @{name}"
-                 + (f" — {followers} followers" if followers is not None else ""), "ok")
+    bio = data.get("bio")
+    activity.log(
+        "visit",
+        f"Opened @{name}"
+        + (f" — {followers} followers" if followers is not None else "")
+        + (f" · bio {len(bio)} chars" if bio else " · no bio on the profile"),
+        "ok")
     return data
 
 
@@ -1034,24 +1621,42 @@ async def _return_to_feed(page) -> None:
             await page.goto(HOME, wait_until="domcontentloaded")
         except Exception:  # noqa: BLE001
             pass
-    await page.wait_for_timeout(1500)
+    # A back-navigation restores from the bfcache and is usually ready at once —
+    # so poll for the feed (ceiling 1.5s) instead of always paying the 1.5s.
+    await _wait_ready(page, _FEED_READY_JS, 1500)
 
 
 def _persist_profile(name: str, data: dict) -> None:
     """Save one scraped profile everywhere it belongs: the bare name to Data
     (usernames.txt, so it joins the campaign name set), the {username, bio} pair
-    to usernames_bio.json in MinIO, and a richer record in the local store. A
-    save hiccup is logged, never raised — it must not sink the scrape."""
+    to usernames_bio.txt in MinIO, and a richer record in the local store. A
+    save hiccup is logged, never raised — it must not sink the scrape.
+
+    A profile whose bio could not be read is saved with NO bio rather than with
+    whatever text happened to be on screen: the bio store's own "unknown"
+    sentinel then marks it as still-to-read, and a later scrape can fill it in.
+    Writing a button label here is what filled the store with "Messages".
+    """
     try:
         from backend import db
 
         db.add_unique_names([name])
-        # usernames_bio.json keeps ONLY the username + bio, nothing else.
+        # usernames_bio.txt keeps ONLY the username + bio, nothing else.
         db.add_username_bios([{"username": name, "bio": data.get("bio")}])
         db.insert({
             "type": "instagram-profile", "title": name,
             "body": (data.get("bio") or ""),
             "full_name": data.get("full_name"),
+            # Instagram's OWN category label ("Artist", "Digital creator") and the
+            # profile's external link — both read straight off the bio block, and
+            # the category in particular is a stronger interest signal than
+            # anything guessable from the bio text.
+            "ig_category": data.get("category"),
+            "link": data.get("link"),
+            # How many further links sit behind the "and N more" button, and the
+            # Threads handle beside the bio — both read off the same block.
+            "links_more": data.get("links_more"),
+            "threads": data.get("threads"),
             "followers": data.get("followers"),
             "following": data.get("following"),
             "posts": data.get("posts"),
@@ -1082,13 +1687,19 @@ async def _visit_profiles_and_store(page, names, *, pause_range, restore=None,
     list can show a bio the moment it's read. Returns how many bios were saved.
     """
     saved = 0
+    # The dwell between profiles is capped at BIO_DWELL_RANGE. Opening a profile
+    # already costs a real navigation, so charging it the full SCROLLING pause on
+    # top made every bio cost seconds of doing nothing — the cap keeps the visits
+    # irregular without that.
+    dwell = (min(pause_range[0], BIO_DWELL_RANGE[0]),
+             min(pause_range[1], BIO_DWELL_RANGE[1]))
     for name in names:
         try:
             await control.checkpoint()          # Stop/Pause land between profiles
         except control.Stopped:
             break
         data = await _open_profile_and_collect(page, name)
-        await control.sleep(random.uniform(*pause_range))   # a human dwell (Stop-aware)
+        await control.sleep(random.uniform(*dwell))   # a human dwell (Stop-aware)
         if data is not None:
             _persist_profile(name, data)
             saved += 1
@@ -2598,6 +3209,100 @@ SEARCH_PANEL_INPUT_SEL = (
     'input[name="searchInput"]'
 )
 
+# Opening the Search flyout: how long one click gets, and how many whole goes the
+# opener gets (each failed go reloads the feed first, so the rail is rebuilt).
+SEARCH_CLICK_TIMEOUT_MS = 5000
+SEARCH_PANEL_ATTEMPTS = 3
+
+
+def _one_line(exc: Exception) -> str:
+    """A Playwright error's first line — its "Call log:" tail runs to pages and
+    the panel has one line to show it in."""
+    lines = str(exc).split("\nCall log:")[0].strip().splitlines()
+    return lines[0].strip() if lines else repr(exc)
+
+
+async def _open_search_panel_once(page) -> None:
+    """One go at opening the sidebar Search flyout and focusing its input.
+
+    Instagram's rail is a React nav whose real click target moves between deploys
+    — the svg, the <a> around it, or a <div role="button"> wrapper — and ANY of
+    them can be covered for a moment by a story tray, a toast, or a modal that is
+    still fading out. A plain click on the wrong one of those is exactly the
+    "Locator.click: Timeout 5000ms exceeded" that used to end the whole run, so
+    every plausible target is tried in turn, then force-clicked past whatever is
+    covering it, then finally clicked synthetically. A synthetic event is a poor
+    imitation of a press, but an opened panel beats a dead scrape.
+
+    Raises if the panel still isn't open and focused at the end of all that.
+    """
+    icon = page.locator(SIDEBAR_SEARCH_SEL).first
+    await icon.wait_for(state="visible", timeout=8000)
+
+    link = icon.locator("xpath=ancestor::a[1]")
+    button = icon.locator('xpath=ancestor::*[@role="button"][1]')
+    targets = []
+    if await link.count():
+        targets.append(link)
+    if await button.count():
+        targets.append(button)
+    targets.append(icon)
+
+    async def _try(press) -> bool:
+        for target in targets:
+            try:
+                await press(target)
+                return True
+            except Exception:  # noqa: BLE001 — this target didn't take; try the next
+                continue
+        return False
+
+    clicked = (
+        await _try(lambda t: t.click(timeout=SEARCH_CLICK_TIMEOUT_MS))
+        or await _try(lambda t: t.click(timeout=SEARCH_CLICK_TIMEOUT_MS, force=True))
+        or await _try(lambda t: t.dispatch_event("click"))
+    )
+    if not clicked:
+        raise RuntimeError("The sidebar Search button could not be clicked.")
+
+    # No blind "let the panel slide open" wait — waiting for the input IS that wait.
+    box = page.locator(SEARCH_PANEL_INPUT_SEL).first
+    await box.wait_for(state="visible", timeout=8000)
+    try:
+        await box.click(timeout=2500)
+    except Exception:  # noqa: BLE001 — an overlay is in the way; focus works too
+        await box.focus()
+
+
+async def _open_search_panel_resilient(page, *, attempts: int = SEARCH_PANEL_ATTEMPTS,
+                                       refresh: bool = True) -> bool:
+    """Open the Search flyout, reloading the feed between failed goes.
+
+    A rail that won't take a click is nearly always a page that has drifted —
+    a stale render, a stuck overlay, a half-navigated route — and a reload fixes
+    it. Returns True once the panel is open, False if every go failed; it never
+    raises, so a caller can carry on with the other technique instead of dying.
+    """
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            await _open_search_panel_once(page)
+            if attempt > 1:
+                activity.log("visit", f"Search panel opened on try {attempt}", "ok")
+            return True
+        except Exception as exc:  # noqa: BLE001
+            activity.log(
+                "visit",
+                f"Search panel wouldn't open (try {attempt}/{attempts}): {_one_line(exc)}",
+                "warn",
+            )
+            if attempt >= attempts or control.stopping():
+                return False
+            if refresh:
+                await _refresh_feed(page)       # a rebuilt rail is a clickable rail
+            else:
+                await page.wait_for_timeout(600)
+    return False
+
 
 # Search seeds typed into Search to shake out a fresh set of suggestions. The
 # harvest draws a random SHAPE each round (see _random_search_seed) so a run
@@ -3446,45 +4151,24 @@ async def open_search(account_id: int | None = None, rounds: int | None = None,
     if not _on_instagram(page):
         activity.log("visit", "Window is not on Instagram - opening Home first", "warn")
         await page.goto(HOME, wait_until="domcontentloaded")
-        await page.wait_for_timeout(2000)
+        await _wait_ready(page, _FEED_READY_JS, 2000)
 
     # Open the sidebar Search flyout and focus its input. Reused to REOPEN the
     # panel after the harvest opens a profile for its bio (a profile visit
     # navigates away and closes the flyout). `strict` raises on failure for the
     # first open; the mid-harvest reopens are best-effort (return without raising).
     async def _open_search_flyout(strict: bool) -> None:
-        icon = page.locator(SIDEBAR_SEARCH_SEL).first
-        try:
-            await icon.wait_for(state="visible", timeout=8000)
-        except Exception as exc:  # noqa: BLE001
-            if strict:
-                raise RuntimeError(
-                    "Couldn't find Search in the Instagram sidebar. Is the window "
-                    "on a logged-in Instagram page?"
-                ) from exc
+        # Retries with a feed reload between goes and every click target tried in
+        # turn, so a rail that momentarily won't take a click doesn't kill the run
+        # — see _open_search_panel_resilient. `strict` (the first open) raises if
+        # every go failed; the mid-harvest reopens are best-effort.
+        if await _open_search_panel_resilient(page):
             return
-        # The icon sits inside the rail's <a>; click that so the nav handles it.
-        link = icon.locator("xpath=ancestor::a[1]")
-        clicker = link if await link.count() else icon
-        try:
-            await clicker.click(timeout=5000)
-        except Exception:  # noqa: BLE001 — fall back to the icon itself
-            await icon.click(timeout=5000)
-        await page.wait_for_timeout(1200)          # let the panel slide open
-        box = page.locator(SEARCH_PANEL_INPUT_SEL).first
-        try:
-            await box.wait_for(state="visible", timeout=8000)
-        except Exception as exc:  # noqa: BLE001
-            if strict:
-                raise RuntimeError(
-                    f"Opened Search, but its input never appeared ({exc}). "
-                    "The panel may still be loading — try again."
-                ) from exc
-            return
-        try:
-            await box.click(timeout=4000)
-        except Exception:  # noqa: BLE001 — an overlay is in the way; focus works too
-            await box.focus()
+        if strict:
+            raise RuntimeError(
+                "Couldn't open Search in the Instagram sidebar. Is the window on a "
+                "logged-in Instagram page?"
+            )
 
     await _open_search_flyout(strict=True)
     activity.log("visit", "Clicked Search in the sidebar", "ok")
@@ -3513,10 +4197,16 @@ async def open_search(account_id: int | None = None, rounds: int | None = None,
         await control.checkpoint()             # Stop/Pause land between rounds
         state.update(round=index)
 
+        # What the panel holds BEFORE this round types anything. Instagram leaves
+        # the last round's rows up while it fetches the next lot, so this is the
+        # fingerprint _wait_search_results needs to tell them apart.
+        before = await _search_results_key(page)
+
         # Clear first, or the next seed types onto the end of the last one.
         await page.keyboard.press("ControlOrMeta+a")
         await page.keyboard.press("Delete")
-        await page.wait_for_timeout(200)
+        await page.wait_for_timeout(PANEL_SETTLE_MS)
+        await page.wait_for_timeout(random.uniform(*SEARCH_PRETYPE_PAUSE_S) * 1000)
 
         # Type key by key: the search input is React-controlled, so setting
         # .value directly doesn't register but real keystrokes do. A user query
@@ -3529,19 +4219,37 @@ async def open_search(account_id: int | None = None, rounds: int | None = None,
             seed = _rand_str(_SEARCH_SEED_ALPHABET, _SEARCH_SEED_LEN)
         else:
             seed = _random_search_seed()
-        await page.keyboard.type(seed, delay=90)
+        # A deliberate one-off query (Actions) keeps its steady metronome; the
+        # harvest, which types round after round, gets the human jitter.
+        if query or click_first:
+            await page.keyboard.type(seed, delay=SEARCH_TYPE_DELAY_MS)
+        else:
+            await _type_search_seed(page, seed)
         seeds.append(seed)
         state.update(seed=seed)
-        await control.sleep(1.4)               # let the suggestions land
+        # Wait for THIS seed's results: the panel has to CHANGE, stop loading and
+        # settle. "Rows are present" was the old test, and from round two on the
+        # rows present were the previous seed's — so every round passed instantly
+        # and the box was cleared and retyped several times a second.
+        #
+        # A deliberate one-off query waits on `""` instead: it only ever runs one
+        # round, so there is no previous seed to be confused with, and demanding a
+        # CHANGE would misread "the result was already showing under Recent" as a
+        # failure and drop the very name the caller asked to open.
+        landed = await _wait_search_results(page, "" if (query or click_first) else before)
 
-        try:
-            found = await page.evaluate(
-                _HARVEST_SEARCH_JS,
-                {"reserved": sorted(RESERVED_PATHS), "self": self_name},
-            )
-        except Exception as exc:  # noqa: BLE001 — one bad round mustn't end the run
-            activity.log("visit", f"Round {index} ({seed!r}) could not be read: {exc}", "warn")
-            found = []
+        # Whatever is on screen when nothing landed belongs to the last round,
+        # not to this seed, so there is nothing here worth reading.
+        found = []
+        if landed:
+            try:
+                found = await page.evaluate(
+                    _HARVEST_SEARCH_JS,
+                    {"reserved": sorted(RESERVED_PATHS), "self": self_name},
+                )
+            except Exception as exc:  # noqa: BLE001 — one bad round mustn't end the run
+                activity.log("visit", f"Round {index} ({seed!r}) could not be read: {exc}", "warn")
+                found = []
 
         fresh = []
         for name in found:
@@ -3556,9 +4264,15 @@ async def open_search(account_id: int | None = None, rounds: int | None = None,
         activity.log(
             "visit",
             f"Search {index}/{rounds} {seed!r} — {len(found)} result(s), "
-            f"{len(fresh)} new (total {len(names)})",
-            "ok",
+            f"{len(fresh)} new (total {len(names)})"
+            + ("" if landed else " — nothing came back for this seed"),
+            "ok" if landed else "warn",
         )
+
+        # Look at the results before reaching for the next seed. Without this the
+        # rounds run back to back and the box visibly flickers between queries.
+        if index < rounds and not (query or click_first):
+            await page.wait_for_timeout(random.uniform(*SEARCH_READ_PAUSE_S) * 1000)
 
         # Bio mode (Search-Scrapping): open each new suggestion's profile, read
         # the bio, and save {username, bio} to usernames_bio.json — then reopen

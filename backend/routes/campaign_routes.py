@@ -31,6 +31,7 @@ class SmsDraft(BaseModel):
     id: str                       # "sms1", "sms2", … (positional, stable)
     text: str = ""
     name: str = ""                # the tab's display name; "" falls back to the id
+    disabled: bool = False        # a disabled draft is kept but never sent
 
 
 class SmsDraftsBody(BaseModel):

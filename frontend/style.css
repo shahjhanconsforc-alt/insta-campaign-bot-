@@ -1367,6 +1367,11 @@ input:focus, textarea:focus {
   width: 100%; min-width: 0; height: 28px; padding: 3px 7px; font-size: 11.5px;
   border: 1px solid var(--line); border-radius: 6px;
 }
+/* Password cell: the box plus its 👁 reveal, sharing the one grid column. */
+.setup-acct-row .acct-pass-wrap { display: flex; align-items: center; gap: 3px; min-width: 0; }
+.setup-acct-row .acct-pass-wrap .acct-pass { flex: 1 1 auto; min-width: 0; }
+.setup-acct-row .acct-eye { font-size: 11px; padding: 0 4px; color: var(--ink-mute); flex: 0 0 auto; }
+.setup-acct-row .acct-eye:hover { color: var(--blue-600); }
 .setup-acct-row .acct-login-btn { padding: 3px 10px; font-size: 11px; }
 .setup-acct-row .acct-status { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .setup-acct-row .acct-remove { font-size: 12px; padding: 0 5px; color: var(--ink-mute); }
@@ -1705,6 +1710,10 @@ input:focus, textarea:focus {
 }
 .sms-tab:hover { border-color: var(--blue-300); }
 .sms-tab.on { background: var(--blue-600); border-color: var(--blue-600); color: #fff; }
+/* Disabled draft: kept in the bar but faded out — the campaign never sends it. */
+.sms-tab.off { opacity: .4; filter: grayscale(.7); }
+.sms-tab.off .sms-label { text-decoration: line-through; }
+.sms-tab.off.on { opacity: .6; }   /* active-but-disabled stays readable */
 .sms-tab .sms-edit {
   border: none; background: none; color: currentColor; cursor: pointer;
   font-size: 12px; line-height: 1; padding: 0; opacity: .65;
