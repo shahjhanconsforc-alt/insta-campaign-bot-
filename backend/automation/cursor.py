@@ -567,3 +567,19 @@ async def type_url(url: str, account_id: int | None = None) -> dict:
         "ok",
     )
     return {"url": url, **result}
+
+
+# ─── Linux / X11 ───────────────────────────────────────────────────────────
+# pywinauto is Windows-only. On Linux (a desktop, or a container whose DISPLAY
+# is a desktop's X server) the same public API is provided by cursor_x11, which
+# drives Chrome with xdotool/xclip instead of UI Automation. Routes keep calling
+# `cursor.<fn>`; only the implementation changes.
+import sys as _sys  # noqa: E402
+
+if not _sys.platform.startswith("win"):
+    from backend.automation import cursor_x11 as _x11  # noqa: E402
+
+    new_tab = _x11.new_tab
+    click_element = _x11.click_element
+    type_url = _x11.type_url
+    focus_window = _x11.focus_window

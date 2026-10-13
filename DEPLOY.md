@@ -38,10 +38,13 @@ works for the API and scraping, but comes with real limits:
 - **Headless only.** In a container there is no screen, so Playwright runs
   headless (`PLAYWRIGHT_HEADLESS=true`, `PLAYWRIGHT_CHANNEL=chromium`). You can't
   watch the Chrome window the way you can locally.
-- **The desktop-cursor feature is disabled.** The address-bar automation in
-  `backend/automation/cursor.py` uses `pywinauto` + `pyautogui`, which are
-  **Windows-desktop only** (skipped by `pip` on Linux via the markers in
-  `requirements.txt`). Everything else runs on Playwright and is unaffected.
+- **The desktop-cursor feature needs a real display.** On Windows it uses
+  `pywinauto` + `pyautogui`. On Linux `backend/automation/cursor_x11.py` provides
+  the same feature with `xdotool`/`xclip` (installed in the image) — it works when
+  the container's `DISPLAY` points at a desktop X server, e.g. a webtop desktop
+  whose `/tmp/.X11-unix` is shared into the container and `PLAYWRIGHT_HEADLESS=false`.
+  Fully headless (no DISPLAY) the feature is unavailable; everything else runs on
+  Playwright and is unaffected.
 - **Instagram will challenge datacenter IPs.** Automated logins from a cloud/server
   IP are far more likely to hit 2FA / "suspicious login" than from a home desktop.
   Expect to finish challenges manually, and prefer a persistent logged-in session.

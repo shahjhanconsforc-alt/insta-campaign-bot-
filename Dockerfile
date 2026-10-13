@@ -7,6 +7,13 @@ FROM mcr.microsoft.com/playwright/python:v1.49.1-jammy
 
 WORKDIR /app
 
+# X11 tools for the desktop-cursor feature on Linux (backend/automation/cursor_x11.py):
+# real pointer/keyboard input via XTEST, clipboard read-back, window lookup. They
+# only do something when DISPLAY points at a desktop (e.g. a shared webtop display).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends xdotool xclip x11-utils \
+ && rm -rf /var/lib/apt/lists/*
+
 # Deps first so this layer is cached until requirements.txt actually changes.
 # pywinauto/pyautogui are marked win32-only in requirements.txt, so pip skips
 # them here (they need a Windows desktop; the desktop-cursor feature is off in a
