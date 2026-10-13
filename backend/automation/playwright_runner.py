@@ -14,6 +14,7 @@ The context is kept in module state so it stays open across HTTP requests:
 click "Open Chrome" once, then navigate/screenshot against the same window.
 """
 import asyncio
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,7 +72,12 @@ def normalize_url(url: str | None) -> str:
 
 # Chrome flags that mark a session as automated. Removing --enable-automation
 # drops the infobar; the blink feature drops navigator.webdriver.
-_AUTOMATION_ARGS = ["--enable-automation", "--no-sandbox"]
+_AUTOMATION_ARGS = ["--enable-automation"]
+# Playwright adds --no-sandbox by default. On a desktop we drop it too (a normal
+# Chrome runs sandboxed), but as root — e.g. inside a container — Chromium refuses
+# to start WITH the sandbox ("Chromium sandboxing failed"), so keep the default there.
+if not (os.name == "posix" and hasattr(os, "geteuid") and os.geteuid() == 0):
+    _AUTOMATION_ARGS.append("--no-sandbox")
 _CLEAN_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-default-browser-check",
