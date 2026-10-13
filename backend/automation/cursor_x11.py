@@ -184,9 +184,11 @@ def _glide(x: int, y: int, duration: float) -> None:
         e = 1 - (1 - t) ** 3                       # ease-out cubic
         px = (1 - e) ** 2 * x0 + 2 * (1 - e) * e * cx + e ** 2 * x
         py = (1 - e) ** 2 * y0 + 2 * (1 - e) * e * cy + e ** 2 * y
-        _xdo("mousemove", "--sync", str(int(round(px))), str(int(round(py))))
+        # no --sync: under Xvfb it waits for a motion event that may never come
+        _xdo("mousemove", str(int(round(px))), str(int(round(py))))
         _sleep(duration / steps)
-    _xdo("mousemove", "--sync", str(x), str(y))
+    _xdo("mousemove", str(x), str(y))
+    _sleep(0.03)
 
 
 def _click() -> None:
@@ -248,9 +250,9 @@ async def _viewport_origin(page, win: _Win) -> dict:
 
     # two probe moves, slightly apart, so we read a fresh event
     tx, ty = est_left + iw // 2, est_top + ih // 2
-    await asyncio.to_thread(_xdo, "mousemove", "--sync", str(tx + 7), str(ty + 5))
+    await asyncio.to_thread(_xdo, "mousemove", str(tx + 7), str(ty + 5))
     await asyncio.sleep(0.12)
-    await asyncio.to_thread(_xdo, "mousemove", "--sync", str(tx), str(ty))
+    await asyncio.to_thread(_xdo, "mousemove", str(tx), str(ty))
     await asyncio.sleep(0.25)
     probe = await page.evaluate("() => window.__cursorProbe")
     left, top, measured = est_left, est_top, False
@@ -495,7 +497,7 @@ async def type_url(url: str, account_id: int | None = None) -> dict:
         f"Typed {url} into the address bar ({result['keystrokes']} keystrokes)",
         "ok",
     )
-    return {"url": url, **result}
+    return {"url": url, "viewport_measured": bool(origin and origin.get("measured")), **result}
 
 
 def type_progress() -> dict:  # pragma: no cover - identical to cursor.type_progress
