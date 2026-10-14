@@ -2527,12 +2527,18 @@ async def _clipboard_set_image_x11(path: str) -> bool:
     try:
         if _xclip_owner and _xclip_owner.poll() is None:
             _xclip_owner.terminate()
+        # -quiet keeps xclip in the foreground (by default it forks and the
+        # parent exits at once, which looked like a failure).
         _xclip_owner = subprocess.Popen(
-            ["xclip", "-selection", "clipboard", "-t", mime, "-i", path],
+            ["xclip", "-selection", "clipboard", "-quiet", "-t", mime, "-i", path],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         await asyncio.sleep(0.6)
-        return _xclip_owner.poll() is None       # still serving the selection
+        targets = subprocess.run(
+            ["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout
+        return mime in targets                  # the clipboard now offers the image
     except Exception:  # noqa: BLE001
         return False
 
