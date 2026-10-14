@@ -405,6 +405,24 @@ def current_profile() -> Path:
     return win["profile"] if win else config.PLAYWRIGHT_USER_DATA_DIR
 
 
+def page_for_profile(profile: Path) -> Page | None:
+    """That profile's Page if its window is open, else None. Never launches."""
+    win = _win(Path(profile))
+    return win["page"] if win else None
+
+
+def backup_session(profile: Path) -> None:
+    """Public wrapper: back one account profile up to the object store now."""
+    _backup_session(Path(profile))
+
+
+def focus_window(profile: Path) -> None:
+    """Bring that profile's window to the front when a desktop is available."""
+    from backend.automation import cursor
+
+    cursor.focus_window(Path(profile))
+
+
 def page_count(profile: Path | None = None) -> int:
     win = _win(profile)
     return len(win["context"].pages) if win else 0

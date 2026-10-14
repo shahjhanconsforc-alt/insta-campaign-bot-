@@ -17,7 +17,11 @@ class LoginBody(BaseModel):
 
 
 @router.get("")
-async def index():
+async def index(live: bool = False):
+    """`live=1` first checks every open window's page for the session cookie, so
+    a login done by hand in Chrome shows up without pressing anything."""
+    if live:
+        return {"accounts": await accounts.list_accounts_live()}
     return {"accounts": accounts.list_accounts()}
 
 
@@ -58,9 +62,22 @@ async def open_one(account_id: int):
 
 @router.post("/login")
 async def login(body: LoginBody):
+    """Manual login: open a Chrome window per account on Instagram's login page.
+    Nothing is typed or clicked — the person logs in, the status check sees it."""
     if not body.ids:
         raise HTTPException(400, "Select at least one account first.")
     return await accounts.login_accounts(body.ids)
+
+
+@router.post("/{account_id}/manual-login")
+async def manual_login(account_id: int):
+    """Open just this account's Chrome window on Instagram for a manual login."""
+    try:
+        return await accounts.manual_login(account_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc)) from exc
 
 
 # ─── Sessions ────────────────────────────────────────────────────────────
@@ -78,13 +95,12 @@ async def sessions_index():
 
 @router.post("/sessions/check")
 async def sessions_check_all():
-    """Check Login Status — every stored session, straight off disk.
-
-    Reads each profile's cookie store; no browser is launched and no login is
-    attempted. A valid `sessionid` means Logged In; anything else (no profile,
-    no cookie, expired) is Logged Out.
+    """Check Login Status — every stored session off disk, plus a live check of
+    each open window's page (a login done by hand in Chrome is on the page
+    before it reaches the cookie file). No browser is launched and no login is
+    attempted.
     """
-    result = sessions.sweep()
+    result = await accounts.live_check_all()
     return {**result, "accounts": accounts.list_accounts()}
 
 
@@ -123,10 +139,10 @@ async def session_of(account_id: int):
 
 @router.post("/{account_id}/session/check")
 async def session_check(account_id: int):
-    """Re-read one account's stored session from disk. No browser."""
+    """Status check for one account: the live page when its window is open
+    (detects a manual login), the stored session on disk otherwise."""
     try:
-        sessions.refresh(account_id)
-        return accounts._public(db.get_account(account_id))  # noqa: SLF001
+        return await accounts.live_check(account_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -173,7 +189,7 @@ async def session_unlock(account_id: int):
 
 @router.post("/{account_id}/new-login")
 async def new_login(account_id: int):
-    """Drop the stored session, then log in fresh and re-lock."""
+    """Drop the stored session, then open a logged-out window for a manual login."""
     try:
         return await accounts.new_login(account_id)
     except KeyError as exc:

@@ -1774,7 +1774,7 @@ $('#btn-campaign-setup')?.addEventListener('click', openCampaignSetup);   // hea
 $('#btn-campaign-open-view')?.addEventListener('click', openCampaignView);
 /* Per-step help shown by each step's ⓘ icon. */
 const STEP_HELP = {
-  1: 'Add one or more Instagram accounts (username / email / phone + password) and log each in. At least one account must be logged in to continue.',
+  1: 'Add one or more Instagram accounts and press Login: Chrome opens on Instagram’s login page — log in there yourself (password, 2FA, everything). The row turns ✅ by itself once the session is detected. At least one account must be logged in to continue.',
   2: 'Upload a .txt / .csv of usernames, or load them from 🗄️ Database. Use the from–to range to pick how many. At least one user is required.',
   3: 'Write a message, or load your saved drafts from 🗄️ Database into the sms tabs — each user gets a random one. Tick “Skip messages” to send no text.',
   4: 'Optionally attach images — upload, or load from 🗄️ Database. A message OR media is required. Tick “Skip media” to send no image.',
@@ -1801,9 +1801,11 @@ $('#wiz-steps')?.addEventListener('click', e => {
   const li = e.target.closest('.wiz-step'); if (li) setupGoto(Number(li.dataset.step));
 });
 
-/* Step 1 — one or more account rows; each creates the account then logs it in
-   (reuses the tested login flow). Pass a saved account to prefill the row —
-   that's how logged-in credentials come back after a reload. */
+/* Step 1 — one or more account rows; Login saves the account (if new) and opens
+   its Chrome window on Instagram's login page. Nothing is typed or clicked: the
+   person logs in by hand and the row polls the status until the session is
+   detected. Pass a saved account to prefill the row — that's how accounts come
+   back after a reload. */
 function addSetupAcctRow(account = null) {
   const box = $('#setup-accounts');
   if (!box) return null;
@@ -1814,10 +1816,10 @@ function addSetupAcctRow(account = null) {
     `<input class="mini acct-label" placeholder="optional" value="${saved ? esc(account.label || '') : ''}">` +
     `<input class="mini acct-login" placeholder="username / email / phone" value="${saved ? esc(account.login || '') : ''}">` +
     '<span class="acct-pass-wrap">' +
-      `<input class="mini acct-pass" type="password" placeholder="${saved ? 'saved — 👁 to reveal' : 'password'}">` +
+      `<input class="mini acct-pass" type="password" placeholder="${saved ? 'saved — 👁 to reveal' : 'optional — you type it in Chrome'}">` +
       (saved ? '<button class="icon-btn acct-eye" type="button" title="Show the saved password" aria-label="Show the saved password">👁</button>' : '') +
     '</span>' +
-    '<button class="btn btn-sm acct-login-btn" type="button">Login</button>' +
+    '<button class="btn btn-sm acct-login-btn" type="button" title="Open this account’s Chrome window on Instagram’s login page — log in there by hand">Login</button>' +
     '<button class="icon-btn acct-close" type="button" aria-label="Close this account browser" title="Close this account’s browser window">⏻</button>' +
     '<span class="acct-status hint"></span>' +
     '<button class="icon-btn acct-remove" type="button" aria-label="Remove account and delete its saved credentials" title="Remove this account and delete its saved credentials">✕</button>';
@@ -1832,10 +1834,69 @@ function addSetupAcctRow(account = null) {
     const status = row.querySelector('.acct-status');
     status.className = 'acct-status hint' + (ready ? ' good' : '');
     status.textContent = ready ? '✅ logged in · window open'
+      : account.window_open ? '🌐 Chrome open — log in there…'
       : account.logged_in ? '💾 saved · session on disk — press Login to reopen'
       : '💾 saved — press Login';
+    // A window that is open but not logged in: keep watching for the manual login.
+    if (account.window_open && !account.logged_in) watchSetupLogin(row, account.id);
   }
   return row;
+}
+
+/* Status writer for one wizard account row. */
+function setupRowSetter(row) {
+  const status = row.querySelector('.acct-status');
+  return (cls, txt) => { status.className = 'acct-status hint' + (cls ? ' ' + cls : ''); status.textContent = txt; };
+}
+
+/* ── Manual-login watcher ─────────────────────────────────────────
+   After Login opened the window, poll the account's status every 3 s. The
+   backend reads the live page's sessionid cookie, so the moment the person
+   finishes logging in (password, 2FA, "save your login info" — whatever
+   Instagram asks) the row flips to ✅ and the campaign gate opens. Stops when
+   the window is closed or after 30 minutes. */
+const setupLoginPolls = new Map();            // accountId → timer
+const SETUP_LOGIN_POLL_MS = 3000;
+const SETUP_LOGIN_WAIT_MAX_MS = 30 * 60 * 1000;
+function stopSetupPoll(id) {
+  const t = setupLoginPolls.get(Number(id));
+  if (t) { clearTimeout(t); setupLoginPolls.delete(Number(id)); }
+}
+function watchSetupLogin(row, id) {
+  id = Number(id);
+  stopSetupPoll(id);
+  const set = setupRowSetter(row);
+  const started = Date.now();
+  const tick = async () => {
+    setupLoginPolls.delete(id);
+    if (!row.isConnected) return;                       // row was rebuilt/removed
+    try {
+      const r = await api(`/accounts/${id}/session/check`, { method: 'POST' });
+      if (r.logged_in) {
+        row.dataset.loggedIn = '1';
+        set('good', '✅ logged in');
+        toast(`✅ ${r.account_name || 'Account'} logged in`);
+        updateSetupGate();
+        return;
+      }
+      if (!r.window_open) {
+        delete row.dataset.loggedIn;
+        set('', '⏻ window closed — press Login to reopen');
+        updateSetupGate();
+        return;
+      }
+      const mins = Math.floor((Date.now() - started) / 60000);
+      set('', `🌐 Chrome open — log in there…${mins ? ` (${mins} min)` : ''}`);
+    } catch (e) {
+      set('bad', e.message);
+    }
+    if (Date.now() - started > SETUP_LOGIN_WAIT_MAX_MS) {
+      set('', 'still not logged in — press Login to keep watching');
+      return;
+    }
+    setupLoginPolls.set(id, setTimeout(tick, SETUP_LOGIN_POLL_MS));
+  };
+  setupLoginPolls.set(id, setTimeout(tick, SETUP_LOGIN_POLL_MS));
 }
 
 /* Rebuild the rows from the saved accounts, so credentials entered here survive
@@ -1887,57 +1948,41 @@ async function loginSetupRow(row) {
   const login = row.querySelector('.acct-login').value.trim();
   const password = row.querySelector('.acct-pass').value;
   const label = row.querySelector('.acct-label').value.trim();
-  const status = row.querySelector('.acct-status');
-  const set = (cls, txt) => { status.className = 'acct-status hint' + (cls ? ' ' + cls : ''); status.textContent = txt; };
+  const set = setupRowSetter(row);
 
-  // A restored row already has its credentials in the store — the backend types
-  // them from there, so nothing needs re-entering (and the box stays empty).
-  if (row.dataset.accountId && !password) {
-    set('', 'starting…');
-    try {
-      const id = Number(row.dataset.accountId);
-      const r = await silentCursorLogin(id, status);
-      if (r.logged_in) { row.dataset.loggedIn = '1'; set('good', '✅ logged in'); }
-      else if (['2fa_required', 'challenge'].includes(r.action)) { set('', '⚠️ finish 2FA / verify in Chrome'); }
-      else { set('bad', r.detail || "didn't complete"); }
-    } catch (e) { set('bad', e.message); }
-    finally { updateSetupGate(); }
-    return;
-  }
-
-  if (!login || !password) { status.className = 'acct-status hint bad'; status.textContent = 'need username + password'; return; }
-  set('', 'starting…');
   try {
-    let accountId;
-    try {
-      const { account } = await api('/accounts', { method: 'POST', body: { label, login, password } });
-      accountId = account.id;
-    } catch (e) {
-      // "<login> is already saved." — don't fail: reuse that account and open its
-      // stored session window directly (it's usually already logged in).
-      if (!/already saved/i.test(e.message || '')) throw e;
-      const { accounts } = await api('/accounts');
-      const existing = (accounts || []).find(a => (a.login || '').toLowerCase() === login.toLowerCase());
-      if (!existing) throw e;
-      row.dataset.accountId = existing.id;
-      markSetupRowSaved(row);                      // already in the store — show it as saved
-      set('', 'opening saved session…');
-      await api(`/accounts/${existing.id}/open`, { method: 'POST' });   // open its window
-      if (existing.logged_in === false) { set('', '🌐 opened — not logged in'); }
-      else { row.dataset.loggedIn = '1'; set('good', '✅ opened saved session'); }
-      return;
+    let id = Number(row.dataset.accountId) || 0;
+    if (!id) {
+      if (!login) { set('bad', 'need a username / email / phone'); return; }
+      set('', 'saving…');
+      try {
+        const { account } = await api('/accounts', { method: 'POST', body: { label, login, password } });
+        id = account.id;
+      } catch (e) {
+        // "<login> is already saved." — reuse that account instead of failing.
+        if (!/already saved/i.test(e.message || '')) throw e;
+        const { accounts } = await api('/accounts');
+        const existing = (accounts || []).find(a => (a.login || '').toLowerCase() === login.toLowerCase());
+        if (!existing) throw e;
+        id = existing.id;
+      }
+      row.dataset.accountId = id;
+      markSetupRowSaved(row);                        // credentials now live in the store
     }
-    row.dataset.accountId = accountId;
-    markSetupRowSaved(row);                        // credentials now live in the store
-    const r = await silentCursorLogin(accountId, status);              // same cursor steps, hidden
-    if (r.logged_in) { row.dataset.loggedIn = '1'; set('good', '✅ logged in'); }
-    else if (['2fa_required', 'challenge'].includes(r.action)) { set('', '⚠️ finish 2FA / verify in Chrome'); }
-    else { set('bad', r.detail || "didn't complete"); }
+
+    // Manual login: only open this account's Chrome window on Instagram. No
+    // typing, no clicking — the person logs in there.
+    stopSetupPoll(id);
+    set('', 'opening Chrome…');
+    const r = await api(`/accounts/${id}/manual-login`, { method: 'POST' });
+    if (r.logged_in) { row.dataset.loggedIn = '1'; set('good', '✅ logged in'); return; }
+    delete row.dataset.loggedIn;
+    set('', '🌐 Chrome open — log in there…');
+    watchSetupLogin(row, id);                      // flips to ✅ once the session is detected
   } catch (e) { set('bad', e.message); }
   finally { updateSetupGate(); }                 // ≥1 logged-in account unlocks Continue
 }
-/* A row whose credentials now live in the store: clear the typed password (it's
-   saved — the backend types it from there) and grow the 👁 reveal button. */
+
 function markSetupRowSaved(row) {
   if (row.dataset.saved === '1') return;
   row.dataset.saved = '1';
@@ -2008,6 +2053,7 @@ async function closeSetupRow(row) {
   const status = row.querySelector('.acct-status');
   const set = (cls, txt) => { status.className = 'acct-status hint' + (cls ? ' ' + cls : ''); status.textContent = txt; };
   if (!id) { set('', 'not opened yet'); return; }
+  stopSetupPoll(id);                      // no window to watch any more
   set('', 'closing…');
   try {
     await api(`/accounts/${id}/session/close`, { method: 'POST' });
@@ -4445,7 +4491,9 @@ document.addEventListener('active-account', () => { syncCount(); syncAutoAccount
 async function loadAccounts() {
   const grid = $('#accounts-grid');
   try {
-    const { accounts } = await api('/accounts');
+    // live=1: open windows are checked on the page itself, so a login done by
+    // hand in Chrome turns the card yellow within one refresh.
+    const { accounts } = await api('/accounts?live=1');
     accountCache = accounts;
     fillAccountPickers(accounts);   // adding/removing an account updates the pickers
     // drop selections for accounts that no longer exist
@@ -4468,7 +4516,7 @@ async function loadAccounts() {
             <span class="acc-state" title="${a.status}">${a.logged_in ? '🟡' : '⚪'}</span>
             <span class="acc-name">${esc(a.account_name)}</span>
             ${a.id === active.id ? '<span class="acc-badge">active</span>' : ''}
-            ${a.window_open ? '<span class="lock" title="Its window is open right now">🪟</span>' : ''}
+            ${a.window_open ? `<span class="lock" title="${a.logged_in ? 'Its window is open right now' : 'Window open — log in there by hand'}">🪟</span>` : ''}
           </div>
           ${a.label ? `<div class="acc-login" title="${esc(a.login)}">${esc(a.login)}</div>` : ''}
           <div class="acc-pass">
@@ -4634,25 +4682,42 @@ setInterval(() => {
   if (!$('#panel-accounts').hidden) loadAccounts();
 }, 4000);
 
-/* Hands the ticked accounts to the Automation panel and runs the sequence
-   there — the credentials get typed in step 4, in front of you. */
-bind('#btn-acc-login', '#out-accounts', async () => {
-  await handoff([...selected]);
+/* Manual login — opens one Chrome window per ticked account on Instagram's
+   login page. Nothing is typed or clicked: log in there by hand; the card
+   turns yellow as soon as the session is detected (the list refreshes live). */
+function describeLoginResults(data) {
+  return data.results.map(r =>
+    `${r.ok ? (r.logged_in ? '🟡' : '🌐') : '✕'} ${r.who || r.id}: ${r.detail || ''}`).join('\n');
+}
+bind('#btn-acc-login', '#out-accounts', async out => {
+  const ids = [...selected];
+  if (!ids.length) throw new Error('Select at least one account first.');
+  show(out, `Opening ${ids.length} Chrome window(s) on Instagram’s login page…`);
+  const data = await api('/accounts/login', { method: 'POST', body: { ids } });
+  show(out, `${describeLoginResults(data)}\n\n` +
+    'Log in by hand in each window. The status is checked on the live page — the card ' +
+    'turns 🟡 Logged In by itself once Instagram sets the session.');
+  toast(`${data.opened}/${data.requested} window(s) opened · ${data.logged_in} already logged in`);
+  loadAccounts();
 });
 
-/* New Login — drop the stored session, then hand over to Automation for a
-   fresh login you can watch. */
-bind('#btn-acc-newlogin', '#out-accounts', async () => {
+/* New Login — drop the stored session, then open a logged-out window for a
+   fresh manual login. */
+bind('#btn-acc-newlogin', '#out-accounts', async out => {
   const id = active.id;
   if (!id) throw new Error('Pick an account first.');
   const a = accountById(id);
-  if (!confirm(`New login for ${a.account_name}?\n\nDeletes its stored session, then runs the login sequence in the Automation panel.`)) return;
-  await handoff([id], { fresh: true });
+  if (!confirm(`New login for ${a.account_name}?\n\nDeletes its stored session and opens a logged-out Chrome window — log in there by hand.`)) return;
+  const data = await api(`/accounts/${id}/new-login`, { method: 'POST' });
+  show(out, `${describeLoginResults(data)}\n\nLog in by hand in the window; the card updates by itself.`);
+  toast('🔄 Session cleared — log in in Chrome');
+  loadAccounts();
 });
 
 /* Check Login Status — two phases:
    1. Read EVERY stored session straight off disk (no browser, no login) to
-      find which profiles hold a valid session. Yellow cards are logged in.
+      find which profiles hold a valid session, and check each OPEN window on
+      its live page (a manual login shows there first). Yellow cards are logged in.
    2. For each account found logged in, OPEN its Chrome profile and load
       instagram.com. The stored session comes up automatically — no credentials
       typed — so you SEE it's really logged in. Logged-out accounts get no
@@ -4660,13 +4725,14 @@ bind('#btn-acc-newlogin', '#out-accounts', async () => {
 const IG_HOME = 'https://www.instagram.com/';
 
 bind('#btn-acc-check', '#out-accounts', async out => {
-  show(out, 'Reading every stored session…');
+  show(out, 'Reading every stored session and checking open windows…');
   const data = await api('/accounts/sessions/check', { method: 'POST' });
   const rows = data.accounts.map(a =>
     `${a.logged_in ? '🟡' : '⚪'} ${a.account_name.padEnd(16)} ${a.status.padEnd(11)} ${a.reason}`);
 
   const live = data.accounts.filter(a => a.logged_in);
-  const head = `${data.logged_in}/${data.checked} accounts have a valid stored session.\n\n${rows.join('\n')}`;
+  const head = `${data.logged_in}/${data.checked} accounts logged in` +
+    `${data.live_checked ? ` (${data.live_checked} open window(s) checked live)` : ''}.\n\n${rows.join('\n')}`;
 
   if (!live.length) {
     show(out, `${head}\n\nRead from the session files — nothing logged in, so no window opened.`);

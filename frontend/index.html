@@ -83,14 +83,14 @@
           <!-- big add-user icon as a centred watermark, with the intro line as a
                caption under it; the account rows (the data) show above -->
           <img src="data/add-user.png" class="add-user-bg" alt="" aria-hidden="true">
-          <p class="add-user-note">Add one or more accounts and log each into Instagram.</p>
+          <p class="add-user-note">Add an account and press Login — Chrome opens on Instagram’s login page. Log in there yourself; the row turns ✅ once the session is detected.</p>
           <div class="setup-acct-head">
-            <span>Label</span><span>Username / email / phone</span><span>Password</span><span></span>
+            <span>Label</span><span>Username / email / phone</span><span>Password (optional)</span><span></span>
           </div>
           <div id="setup-accounts"><!-- account rows injected by app.js --></div>
           <!-- pinned to the bottom: Log in all + Add account (left), note (right) -->
           <div class="setup-login-foot">
-            <button class="btn btn-primary btn-sm" id="btn-setup-login-all" type="button">🚀 Log in all</button>
+            <button class="btn btn-primary btn-sm" id="btn-setup-login-all" type="button" title="Open a Chrome window per account on Instagram’s login page">🌐 Open login for all</button>
             <button class="btn btn-sm" id="btn-setup-add-acct" type="button">+ Add account</button>
             <span class="hint" id="setup-login-note"></span>
           </div>
@@ -699,11 +699,11 @@
     <section class="panel" id="panel-accounts" role="tabpanel" hidden>
       <div class="panel-head">
         <h2>Accounts</h2>
-        <p>Each account keeps its own Chrome profile, so their sessions never overwrite each other.</p>
+        <p>Each account keeps its own Chrome profile, so their sessions never overwrite each other. Login is manual: <b>Log in selected</b> opens the account’s Chrome window on Instagram — log in there by hand and the status turns Logged In by itself.</p>
       </div>
       <div class="panel-body">
         <div class="row">
-          <button class="btn btn-primary" id="btn-acc-login">🔐 Log in selected</button>
+          <button class="btn btn-primary" id="btn-acc-login" title="Opens each selected account’s Chrome window on Instagram’s login page — nothing is typed; log in by hand">🔐 Log in selected</button>
           <button class="btn" id="btn-acc-newlogin">🔄 New Login</button>
           <button class="btn" id="btn-acc-check">Check Login Status</button>
           <button class="btn" id="btn-acc-refresh">Refresh</button>
