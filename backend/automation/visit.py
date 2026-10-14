@@ -4534,3 +4534,247 @@ async def open_messages(
         "first_result": first_result,
         "url": page.url,
     }
+
+
+# ─── Comments campaign ───────────────────────────────────────────────────────
+# HOME → scroll → like → comment, post after post, until Stop. One random
+# message from the campaign's drafts is typed (never pasted) under each post.
+# Progress is kept per account so the panel can show live counters.
+
+_comments: dict[int | None, dict] = {}
+
+# A feed post. Instagram renders each one as an <article>; the action bar
+# inside carries the Like/Comment svgs and the inline comment box.
+POST_SEL = "article"
+POST_LIKE_SEL = 'svg[aria-label="Like"]'
+POST_LIKED_SEL = 'svg[aria-label="Unlike"]'
+POST_COMMENT_ICON_SEL = 'svg[aria-label="Comment"]'
+POST_COMMENT_BOX_SEL = (
+    'textarea[aria-label*="comment" i], textarea[placeholder*="comment" i], '
+    '[contenteditable="true"][aria-label*="comment" i], '
+    '[contenteditable="true"][aria-placeholder*="comment" i], '
+    'form textarea, form [contenteditable="true"][role="textbox"]'
+)
+# Pace. "Peaceful": a human reads a post for a while before reacting, and
+# never fires comments back to back.
+COMMENT_GAP_S = (12.0, 28.0)          # between posts
+COMMENT_READ_S = (2.5, 6.0)           # looking at a post before liking it
+COMMENT_SCROLL_STEP = (0.55, 0.95)    # fraction of the window per scroll
+COMMENT_SCROLL_PAUSE = (0.8, 1.6)     # seconds per glide
+
+
+def comments_progress(account_id: int | None = None) -> dict:
+    """Live counters of the comments campaign for one account (or all)."""
+    if account_id is not None:
+        return dict(_comments.get(account_id) or {"running": False})
+    return {str(k): v for k, v in _comments.items()}
+
+
+def _pick_comment_message(messages: list[str] | None) -> str:
+    pool = [" ".join(str(m).split()) for m in (messages or []) if str(m).strip()]
+    return random.choice(pool) if pool else _pick_reel_comment()
+
+
+async def _post_key(article) -> str:
+    """Something stable to remember a post by: its /p/ or /reel/ link, else the
+    first username in it plus its position."""
+    try:
+        return await article.evaluate("""el => {
+          const a = el.querySelector('a[href^="/p/"], a[href^="/reel/"], a[href*="/p/"]');
+          if (a) return a.getAttribute('href');
+          const u = el.querySelector('a[href^="/"][role="link"], header a');
+          return (u ? u.getAttribute('href') : '?') + '@' + Math.round(el.getBoundingClientRect().top + window.scrollY);
+        }""")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+async def _next_feed_post(page, seen: set[str]):
+    """The first <article> not handled yet, scrolled into view. None if the
+    feed shows nothing new right now."""
+    posts = page.locator(POST_SEL)
+    try:
+        n = await posts.count()
+    except Exception:  # noqa: BLE001
+        return None, ""
+    for i in range(n):
+        art = posts.nth(i)
+        key = await _post_key(art)
+        if not key or key in seen:
+            continue
+        try:
+            if not await art.is_visible():
+                continue
+            await art.scroll_into_view_if_needed(timeout=4000)
+        except Exception:  # noqa: BLE001
+            continue
+        return art, key
+    return None, ""
+
+
+async def _like_post(page, article) -> str:
+    """Like the post if it isn't liked yet. Returns liked / already / missing."""
+    try:
+        if await article.locator(POST_LIKED_SEL).count():
+            return "already"
+        icon = article.locator(POST_LIKE_SEL)
+        if not await icon.count():
+            return "missing"
+        if await _click_menu_match(icon):
+            await page.wait_for_timeout(random.randint(500, 1100))
+            return "liked"
+    except Exception:  # noqa: BLE001
+        pass
+    return "missing"
+
+
+async def _comment_on_post(page, article, text: str) -> bool:
+    """Type `text` under the post and submit it. Uses the inline box when the
+    feed shows one, otherwise the Comment icon (which may open the post's
+    dialog). Returns True when the comment was submitted."""
+    box = article.locator(POST_COMMENT_BOX_SEL).first
+    opened_dialog = False
+    try:
+        visible = bool(await box.count()) and await box.is_visible()
+    except Exception:  # noqa: BLE001
+        visible = False
+    if not visible:
+        if not await _click_menu_match(article.locator(POST_COMMENT_ICON_SEL)):
+            return False
+        await page.wait_for_timeout(1200)
+        dialog = page.locator('div[role="dialog"]').last
+        try:
+            if await dialog.count() and await dialog.is_visible():
+                opened_dialog = True
+                box = dialog.locator(POST_COMMENT_BOX_SEL).first
+            else:
+                box = article.locator(POST_COMMENT_BOX_SEL).first
+            await box.wait_for(state="visible", timeout=6000)
+        except Exception:  # noqa: BLE001
+            return False
+
+    try:
+        try:
+            await box.click(timeout=4000)
+        except Exception:  # noqa: BLE001
+            await box.focus()
+        await page.wait_for_timeout(random.randint(250, 600))
+        await page.keyboard.type(text, delay=random.randint(45, 95))
+        await page.wait_for_timeout(random.randint(500, 1200))
+        # Enter posts in the inline box; the dialog wants the Post button.
+        posted = False
+        if opened_dialog:
+            posted = await _click_button_text(page, "Post")
+        if not posted:
+            await page.keyboard.press("Enter")
+            posted = True
+        await page.wait_for_timeout(1500)
+        # Confirmation: the box emptied (Instagram clears it once the comment
+        # is accepted).
+        try:
+            left = (await box.input_value()) if await box.evaluate("el => el.tagName === 'TEXTAREA'") \
+                else (await box.inner_text())
+            if (left or "").strip():
+                # still there — try the explicit Post button once
+                if await _click_button_text(page, "Post"):
+                    await page.wait_for_timeout(1500)
+        except Exception:  # noqa: BLE001
+            pass
+        return posted
+    finally:
+        if opened_dialog:
+            try:
+                await page.keyboard.press("Escape")
+                await page.wait_for_timeout(600)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+async def comments_campaign(account_id: int | None = None,
+                            messages: list[str] | None = None) -> dict:
+    """HOME → scroll → like → comment, until Stop is pressed.
+
+    Walks the home feed post by post: scrolls to the next unseen post, reads it
+    for a moment, likes it, types one random message from `messages` (the
+    campaign's drafts; the built-in bank when none) and posts it, waits a
+    human-sized gap, scrolls on. Never ends on its own — a stalled feed is
+    refreshed — so the Stop button is how it finishes."""
+    page = account_page(account_id)
+    state = {
+        "running": True, "account_id": account_id, "posts": 0, "liked": 0,
+        "commented": 0, "skipped": 0, "scrolls": 0, "refreshes": 0,
+        "last": None, "last_comment": None, "error": None,
+        "started_at": time.strftime("%H:%M:%S"),
+    }
+    _comments[account_id] = state
+    seen: set[str] = set()
+    pool = [m for m in (messages or []) if str(m).strip()]
+    activity.log("visit", f"Comments campaign started ({len(pool) or len(REEL_COMMENTS)} message(s)) — HOME → scroll → like → comment", "ok")
+
+    try:
+        await _ensure_home(page)
+        await page.wait_for_timeout(2500)
+        idle_scrolls = 0
+        while True:
+            await control.checkpoint()
+            article, key = await _next_feed_post(page, seen)
+            if article is None:
+                # Nothing new on screen: scroll on; after a while, refresh.
+                idle_scrolls += 1
+                state["scrolls"] += 1
+                await _feed_scroll_step(page, COMMENT_SCROLL_STEP, COMMENT_SCROLL_PAUSE)
+                await control.sleep(random.uniform(0.8, 1.8))
+                if idle_scrolls >= 8:
+                    idle_scrolls = 0
+                    state["refreshes"] += 1
+                    activity.log("visit", "Comments: feed shows nothing new — refreshing Home", "warn")
+                    await _refresh_feed(page)
+                    await page.wait_for_timeout(2500)
+                continue
+            idle_scrolls = 0
+            seen.add(key)
+            state["posts"] += 1
+            state["last"] = key
+
+            # read the post for a moment, like a person would
+            await control.sleep(random.uniform(*COMMENT_READ_S))
+            await control.checkpoint()
+            liked = await _like_post(page, article)
+            if liked == "liked":
+                state["liked"] += 1
+            activity.log("visit", f"Comments: post {state['posts']} {key} — like: {liked}", "ok")
+
+            await control.sleep(random.uniform(1.0, 2.5))
+            await control.checkpoint()
+            text = _pick_comment_message(pool)
+            try:
+                ok = await _comment_on_post(page, article, text)
+            except control.Stopped:
+                raise
+            except Exception as exc:  # noqa: BLE001 — one post must not end the run
+                ok = False
+                activity.log("visit", f"Comments: couldn't comment on {key}: {str(exc).splitlines()[0][:120]}", "warn")
+            if ok:
+                state["commented"] += 1
+                state["last_comment"] = text
+                activity.log("visit", f"Comments: commented {text!r} on {key}", "ok")
+            else:
+                state["skipped"] += 1
+                activity.log("visit", f"Comments: no comment box on {key} — skipped", "warn")
+
+            # the peaceful part: a long, varied gap before the next post
+            await control.sleep(random.uniform(*COMMENT_GAP_S))
+            await control.checkpoint()
+            state["scrolls"] += 1
+            await _feed_scroll_step(page, COMMENT_SCROLL_STEP, COMMENT_SCROLL_PAUSE)
+            await control.sleep(random.uniform(0.6, 1.5))
+    except control.Stopped:
+        activity.log("visit", f"Comments campaign stopped — {state['posts']} post(s): "
+                     f"{state['liked']} liked, {state['commented']} commented", "warn")
+    except Exception as exc:  # noqa: BLE001
+        state["error"] = str(exc).split("\nCall log:")[0].strip()[:200]
+        activity.log("visit", f"Comments campaign ended with an error: {state['error']}", "error")
+    finally:
+        state["running"] = False
+        state["ended_at"] = time.strftime("%H:%M:%S")
+    return dict(state)

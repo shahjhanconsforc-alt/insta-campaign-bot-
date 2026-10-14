@@ -2258,6 +2258,7 @@ function setupMessagePool() {
 /* When there's NO message, media becomes required: hide "Skip media" and block
    Continue on the Media step until an image is attached (can't send nothing). */
 function updateSetupGate() {
+  updateCommentsButton();
   const hasMsg = setupMessagePool().length > 0;
   const skipLabel = $('#campaign-setup .wiz-pane[data-pane="4"] .wiz-skip');
   const skipMedia = $('#setup-skip-media');
@@ -2442,6 +2443,60 @@ function renderSetupSummary() {
     }, 400 + i * 350);                                        // staggered reveal
   });
 }
+/* ── Comments campaign ───────────────────────────────────────────
+   HOME → scroll → like → comment, in every logged-in account's window, with a
+   random message from step 3 typed under each post. The backend runs it as a
+   background job until ⏹ Stop; this polls its counters into the note. */
+const commentsRun = { ids: [], timer: null };
+function updateCommentsButton() {
+  const btn = $('#btn-comments-campaign'); if (!btn) return;
+  const ids = loggedInAccountIds();
+  btn.disabled = !ids.length && !commentsRun.ids.length;
+}
+async function pollCommentsProgress() {
+  const note = $('#comments-campaign-note');
+  const btn = $('#btn-comments-campaign');
+  let anyRunning = false;
+  const parts = [];
+  for (const id of commentsRun.ids) {
+    try {
+      const p = await api(`/automation/comments-progress?account_id=${id}`);
+      const who = accountById(id)?.account_name || `#${id}`;
+      if (p.running) anyRunning = true;
+      parts.push(`${who}: ${p.posts || 0} posts · ❤️ ${p.liked || 0} · 💬 ${p.commented || 0}` +
+                 (p.skipped ? ` · skipped ${p.skipped}` : '') + (p.error ? ` · ⚠ ${p.error}` : '') +
+                 (p.running ? '' : ' · ended'));
+    } catch (e) { parts.push(`#${id}: ${e.message}`); }
+  }
+  if (note) note.textContent = (anyRunning ? '💬 Running — press ⏹ Stop to end. ' : '💬 Finished. ') + parts.join(' | ');
+  if (btn) { btn.classList.toggle('live', anyRunning); btn.textContent = anyRunning ? '💬 Comments campaign running…' : '💬 Comments campaign'; }
+  if (!anyRunning) { clearInterval(commentsRun.timer); commentsRun.timer = null; commentsRun.ids = []; updateCommentsButton(); }
+}
+$('#btn-comments-campaign')?.addEventListener('click', async () => {
+  const ids = loggedInAccountIds();
+  if (!ids.length) { toast('Log at least one account in (step 1) first.', true); return; }
+  const messages = setupMessagePool();
+  if (!confirm(`Start the Comments campaign on ${ids.length} account(s)?\n\n` +
+    `Home → scroll → like → comment on post after post, using ${messages.length ? messages.length + ' message(s) from step 3' : 'the built-in comment bank'}.\n` +
+    `It keeps going until you press ⏹ Stop.`)) return;
+  const started = [];
+  for (const id of ids) {
+    try {
+      await api('/automation/comments-campaign', { method: 'POST', body: { account_id: id, messages } });
+      started.push(id);
+    } catch (e) { toast(`${accountById(id)?.account_name || id}: ${e.message}`, true); }
+  }
+  if (!started.length) return;
+  commentsRun.ids = started;
+  toast(`💬 Comments campaign started on ${started.length} account(s)`);
+  const note = $('#campaign-note');
+  if (note) { note.className = 'banner good'; note.textContent = `💬 Comments campaign running on ${started.length} account(s) — Home → scroll → like → comment. Press ⏹ Stop to end.`; }
+  clearInterval(commentsRun.timer);
+  commentsRun.timer = setInterval(pollCommentsProgress, 3000);
+  pollCommentsProgress();
+  refreshControls();
+});
+
 $('#btn-setup-start')?.addEventListener('click', () => {
   renderSetupSummary();
   const ids = loggedInAccountIds();

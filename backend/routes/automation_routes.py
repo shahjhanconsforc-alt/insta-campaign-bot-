@@ -733,6 +733,53 @@ async def search_campaign(body: SearchCampaignBody):
         raise HTTPException(502, str(exc).split("\nCall log:")[0].strip()) from exc
 
 
+class CommentsCampaignBody(BaseModel):
+    account_id: int | None = None
+    messages: list[str] = []
+
+
+@router.post("/comments-campaign")
+async def comments_campaign(body: CommentsCampaignBody):
+    """Comments campaign: in this account's open window go HOME, then scroll →
+    like → comment (one random message from `messages`) post after post until
+    the Stop button. Runs in the background; poll /comments-progress."""
+    from backend import tasks
+    from backend.automation import visit as visitor
+
+    account_id = body.account_id
+    if account_id is not None:
+        if not db_has(account_id):
+            raise HTTPException(404, f"No account {account_id}")
+        busy = tasks.is_busy(account_id)
+        if busy:
+            raise HTTPException(409, f"That account is already running {busy!r}.")
+    try:
+        visitor.account_page(account_id)          # raises when its window is closed
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    messages = [m for m in (body.messages or []) if str(m).strip()]
+
+    async def _run():
+        try:
+            with tasks.claim(account_id, "Comments campaign"):
+                await visitor.comments_campaign(account_id=account_id, messages=messages)
+        except Exception as exc:  # noqa: BLE001 — logged by the job itself
+            activity.log("visit", f"Comments campaign task ended: {exc}", "warn")
+
+    asyncio.create_task(_run())
+    return {"started": True, "account_id": account_id, "messages": len(messages),
+            "account": _account_name(account_id)}
+
+
+@router.get("/comments-progress")
+async def comments_progress(account_id: int | None = None):
+    """Live counters of the comments campaign (posts, liked, commented…)."""
+    from backend.automation import visit as visitor
+
+    return visitor.comments_progress(account_id)
+
+
 @router.get("/visit-progress")
 async def visit_progress(account_id: int | None = None):
     """Names found so far by a scrape in flight — polled so the panel can list
