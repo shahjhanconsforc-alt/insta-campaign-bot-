@@ -17,7 +17,9 @@ services:
       PORT: 4000
       ENV: production
       # Reach the sibling service by its compose DNS name, not localhost.
-      MINIO_URL: minio:9000
+      # External shared store by default (set MINIO_URL in .env); the bundled minio
+      # service is optional: `docker compose --profile with-minio up -d`.
+      MINIO_URL: ${MINIO_URL:-minio:9000}
       MINIO_USER: ${MINIO_USER:?set MINIO_USER in .env}
       MINIO_PASSWORD: ${MINIO_PASSWORD:?set MINIO_PASSWORD in .env}
       MINIO_BUCKET: ${MINIO_BUCKET:-insta-bot-usernames}
@@ -29,11 +31,10 @@ services:
       IG_PASSWORD: ${IG_PASSWORD:-}
     volumes:
       - app_data:/app/backend/data     # store.json, screenshots, chrome-profile
-    depends_on:
-      - minio
     restart: unless-stopped
 
   minio:
+    profiles: ["with-minio"]   # only when no shared object store is available
     image: minio/minio
     container_name: minio
     ports:

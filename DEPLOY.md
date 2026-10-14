@@ -12,8 +12,10 @@ both together.
 cp .env.example .env          # PowerShell: Copy-Item .env.example .env
 #    set at least MINIO_USER and MINIO_PASSWORD
 
-# 2. build + start app, minio
+# 2. build + start the app (uses the shared object store in MINIO_URL)
 docker compose up -d --build
+#    or, with the bundled MinIO-compatible store when no shared one exists:
+#    docker compose --profile with-minio up -d --build
 
 # 3. open the UI
 #    app      → http://localhost:4000
