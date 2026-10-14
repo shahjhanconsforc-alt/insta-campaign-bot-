@@ -2201,7 +2201,10 @@ MEDIA_ICON_SEL = (
 )
 # Prefer the input that declares it takes images (the composer's), else any file
 # input on the page.
-FILE_INPUT_IMG_SEL = 'input[type="file"][accept*="image" i]'
+FILE_INPUT_IMG_SEL = (
+    'input[type="file"][accept*="image" i], input[type="file"][accept*=".jpg" i], '
+    'input[type="file"][accept*=".jpeg" i], input[type="file"][accept*=".png" i]'
+)
 FILE_INPUT_SEL = 'input[type="file"]'
 # In an open DM the blue Send appears once there's something to send — the
 # fallback for media with no caption, where Enter may not have focus.
@@ -2504,13 +2507,48 @@ _DROP_JS = """async (files) => {
 _clipboard_lock = asyncio.Lock()
 
 
+_xclip_owner = None     # the xclip process serving the clipboard right now (Linux)
+
+
+async def _clipboard_set_image_x11(path: str) -> bool:
+    """Linux: put one image on the X clipboard with xclip (image/png or
+    image/jpeg). xclip stays alive as the selection owner until something else
+    takes the clipboard, so it is started detached and the previous one is
+    retired first."""
+    global _xclip_owner
+    import shutil
+    import subprocess
+
+    if not shutil.which("xclip") or not os.environ.get("DISPLAY"):
+        return False
+    mime = mimetypes.guess_type(path)[0] or "image/png"
+    if mime not in ("image/png", "image/jpeg"):
+        return False
+    try:
+        if _xclip_owner and _xclip_owner.poll() is None:
+            _xclip_owner.terminate()
+        _xclip_owner = subprocess.Popen(
+            ["xclip", "-selection", "clipboard", "-t", mime, "-i", path],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        await asyncio.sleep(0.6)
+        return _xclip_owner.poll() is None       # still serving the selection
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def _clipboard_set_files(paths: list[str]) -> bool:
     """Put real files on the OS clipboard, the way Explorer's Copy does.
 
-    Windows only; returns False anywhere else (or on failure) so the caller just
-    falls through to the other attach methods.
+    Windows: PowerShell Set-Clipboard with the file paths. Linux with a desktop
+    (DISPLAY set): the image bytes via xclip. Returns False anywhere else (or on
+    failure) so the caller just falls through to the other attach methods.
     """
-    if sys.platform != "win32" or not paths:
+    if not paths:
+        return False
+    if sys.platform.startswith("linux"):
+        return await _clipboard_set_image_x11(paths[0])
+    if sys.platform != "win32":
         return False
     quoted = ",".join('"{}"'.format(p.replace('"', '`"')) for p in paths)
     try:
@@ -2563,6 +2601,38 @@ async def _drop_on_composer(page, payload: list[dict]) -> bool:
         return False
 
 
+async def _wait_for_upload_surface(page, timeout_ms: int = 15000) -> dict:
+    """Poll until the open thread shows a visible composer plus a way to add a
+    photo (a file input or the photo icon). Returns what was found and how
+    long it took; never raises."""
+    started = time.monotonic()
+    found = {"ready": False, "inputs": 0, "icons": 0, "waited_ms": 0}
+    while True:
+        try:
+            n_in = await page.locator(FILE_INPUT_SEL).count()
+            icons = page.locator(MEDIA_ICON_SEL)
+            n_icon = 0
+            for i in range(await icons.count()):
+                try:
+                    if await icons.nth(i).is_visible():
+                        n_icon += 1
+                except Exception:  # noqa: BLE001
+                    pass
+            box = await _best_visible_textbox(page)
+            found.update(inputs=n_in, icons=n_icon)
+            if box is not None and (n_in or n_icon):
+                found["ready"] = True
+                break
+        except Exception:  # noqa: BLE001 — page mid-navigation; keep polling
+            pass
+        found["waited_ms"] = int((time.monotonic() - started) * 1000)
+        if found["waited_ms"] >= timeout_ms:
+            break
+        await page.wait_for_timeout(300)
+    found["waited_ms"] = int((time.monotonic() - started) * 1000)
+    return found
+
+
 async def _attach_media(page, paths: list[str]) -> dict:
     """Attach `paths` into the open conversation, once per name, trying every
     method until a staged preview appears.
@@ -2586,7 +2656,12 @@ async def _attach_media(page, paths: list[str]) -> dict:
             media_name=name,
         )
 
-    # Wait for THIS conversation's composer before attaching.
+    # Wait for THIS conversation's composer AND its upload surface (the hidden
+    # file input / "Add Photo or Video" icon). Right after the search result is
+    # clicked the thread is still rendering: the previous composer may still be
+    # on screen while the new thread has no file input yet — attaching at that
+    # moment found "0 file inputs, 0 photo icons" and the DM went out text-only.
+    surface = await _wait_for_upload_surface(page, timeout_ms=15000)
     box = await _best_visible_textbox(page)
     if box is None:
         box = page.locator(MESSAGE_SEL).first
@@ -2596,6 +2671,13 @@ async def _attach_media(page, paths: list[str]) -> dict:
         await box.wait_for(state="visible", timeout=8000)
     except Exception:  # noqa: BLE001
         pass
+    if not surface["ready"]:
+        activity.log(
+            "visit",
+            f"    media: upload surface not found after {surface['waited_ms']} ms "
+            f"(url {page.url})",
+            "warn",
+        )
 
     before = await _staged_preview_count(page)
     payload = _files_payload(paths)          # read bytes once, reused by drop
@@ -2613,7 +2695,9 @@ async def _attach_media(page, paths: list[str]) -> dict:
     except Exception:  # noqa: BLE001
         pass
 
-    async def landed(tries: int = 8) -> bool:
+    async def landed(tries: int = 20) -> bool:
+        # ~7 s: the staged preview of a multi-megabyte image takes a few
+        # seconds to render on a small VM.
         for _ in range(tries):
             await page.wait_for_timeout(350)
             if await _staged_preview_count(page) > before:
@@ -2623,13 +2707,22 @@ async def _attach_media(page, paths: list[str]) -> dict:
     used = "none"
     verified = False
 
-    methods = [
-        ("paste",       lambda: _paste_via_keyboard(page, box, paths)),
-        ("drop",        lambda: _drop_on_composer(page, payload)),
-        ("input",       lambda: _set_files_on_any(page, paths)),
-        ("file_chooser", lambda: _click_photo_icon(page, paths)),
-        ("input",       lambda: _set_files_on_any(page, paths)),   # retry after icon revealed one
-    ]
+    if sys.platform == "win32":
+        methods = [
+            ("paste",        lambda: _paste_via_keyboard(page, box, paths)),
+            ("input",        lambda: _set_files_on_any(page, paths)),
+            ("file_chooser", lambda: _click_photo_icon(page, paths)),
+            ("input",        lambda: _set_files_on_any(page, paths)),   # retry after icon revealed one
+            ("drop",         lambda: _drop_on_composer(page, payload)),
+        ]
+    else:
+        methods = [
+            ("input",        lambda: _set_files_on_any(page, paths)),
+            ("file_chooser", lambda: _click_photo_icon(page, paths)),
+            ("paste",        lambda: _paste_via_keyboard(page, box, paths)),
+            ("input",        lambda: _set_files_on_any(page, paths)),
+            ("drop",         lambda: _drop_on_composer(page, payload)),
+        ]
     for name, run in methods:
         try:
             issued = await run()
@@ -2740,9 +2833,10 @@ async def _deliver(
         if att.get("via") and att.get("via") != "none":
             result["media_attached"] = att["attached"]
         else:
-            result["reason"] = "no photo input found to attach the image"
-            if mode == "media":
-                return result
+            # No way to attach was found. In Both mode the image IS part of the
+            # message, so don't quietly send the text alone — report it.
+            result["reason"] = "image not attached (no photo input/icon found) — not sent"
+            return result
         if not att.get("verified"):
             result["reason"] = "attached but preview not confirmed — sent anyway"
 
