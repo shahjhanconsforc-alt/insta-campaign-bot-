@@ -524,6 +524,11 @@ input:focus, textarea:focus {
 .data-cat-table .dc-bio { color: var(--ink); line-height: 1.4; min-width: 220px; max-width: 460px; word-break: break-word; }
 .data-cat-table .dc-cat { white-space: nowrap; }
 /* the category pill in the table's last column */
+.data-cat-table .dc-failed {
+  margin-left: 5px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em;
+  color: #b42318; background: #fef3f2; border: 1px solid #fecdca;
+  border-radius: 999px; padding: 0 5px; vertical-align: middle; white-space: nowrap;
+}
 .dc-cat-tag {
   display: inline-block; font-size: 11px; font-weight: 600; color: var(--blue-700);
   background: var(--blue-50); border: 1px solid var(--blue-100);

@@ -45,13 +45,17 @@ log = mc.log
 # The stored columns. `used_count` is carried here (rather than left in the bio
 # store) because a categorized handle no longer has a row over there to hold it.
 USED_FIELD = "used_count"
+# Last campaign outcome on the handle ("sent" / "failed" / "") and why it failed —
+# campaign facts like used_count, never reset by a re-categorization.
+STATUS_FIELD = "campaign_status"
+REASON_FIELD = "fail_reason"
 # `category` stays a single string — the Data panel's tick list and the campaign
 # wizard both key off one category per handle, so the pipeline's best category
 # goes there and the FULL set rides alongside in `categories`. That is what lets
 # a multi-category pipeline write into the table the UI already reads without the
 # UI changing at all.
 _FIELDS = ("username", "bio", "category", "categories", "tags",
-           "specifics", "locations", USED_FIELD)
+           "specifics", "locations", USED_FIELD, STATUS_FIELD, REASON_FIELD)
 
 # The list-valued columns; each rides in one column, semicolon-joined. A
 # semicolon is safe here in a way a comma is not: these hold short interest,
@@ -166,6 +170,8 @@ def upsert(records) -> dict:
                 added += 1
             else:
                 rec[USED_FIELD] = int(existing.get(USED_FIELD) or 0)   # usage survives
+                rec[STATUS_FIELD] = existing.get(STATUS_FIELD) or ""   # and so does the outcome
+                rec[REASON_FIELD] = existing.get(REASON_FIELD) or ""
                 by_key[key] = rec
                 updated += 1
         merged = list(by_key.values())
@@ -216,6 +222,38 @@ def bump_uses(names) -> dict:
         log.info("category store: bumped used_count on %d handle(s), %d not here",
                  bumped, len(missing))
         return {"bumped": bumped, "missing": missing}
+
+
+def set_statuses(mapping) -> dict:
+    """Record each stored handle's last campaign outcome: `mapping` is
+    {username: (status, reason)}, status "sent" or "failed". Only handles already
+    here are touched; the rest come back in `missing` for the bio store."""
+    wanted = {}
+    for key, value in (mapping or {}).items():
+        name = str(key or "").strip().lstrip("@")
+        status, reason = (value if isinstance(value, (tuple, list)) else (value, ""))[:2]
+        status = str(status or "").strip().lower()
+        if name and status in ("sent", "failed"):
+            wanted[name] = (status, str(reason or "")[:160] if status == "failed" else "")
+    if not wanted:
+        return {"updated": 0, "missing": []}
+    with _lock:
+        rows = load_all()
+        by_key = {r["username"].lower(): r for r in rows if r.get("username")}
+        updated, missing = 0, []
+        for name, (status, reason) in wanted.items():
+            row = by_key.get(name.lower())
+            if row is None:
+                missing.append(name)
+            else:
+                row[STATUS_FIELD] = status
+                row[REASON_FIELD] = reason
+                updated += 1
+        if updated:
+            _put(rows)
+        log.info("category store: campaign status on %d handle(s), %d not here",
+                 updated, len(missing))
+        return {"updated": updated, "missing": missing}
 
 
 def adopt_uses(mapping) -> dict:

@@ -160,6 +160,30 @@ def bump_username_uses(names: list[str]) -> dict:
     }
 
 
+def record_campaign_outcomes(sent: list[str], failed: dict[str, str]) -> dict:
+    """Stamp each handle with how its last campaign attempt ended — "sent", or
+    "failed" with the reason — so the wizard can label and filter failed handles.
+    Same routing as bump_username_uses: category store first, the rest to the
+    bio store. Returns {"updated", "added"}."""
+    from services.storage import insta_bio_storage as bios
+    from services.storage import insta_category_storage as cats
+
+    mapping: dict[str, tuple[str, str]] = {}
+    for name in sent or []:
+        mapping[str(name)] = ("sent", "")
+    for name, reason in (failed or {}).items():
+        mapping[str(name)] = ("failed", str(reason or "")[:160])
+    if not mapping:
+        return {"updated": 0, "added": 0}
+    try:
+        first = cats.set_statuses(mapping)
+    except Exception:  # noqa: BLE001 — a category-store hiccup mustn't lose the outcome
+        first = {"updated": 0, "missing": list(mapping)}
+    rest = bios.set_statuses({n: mapping[n] for n in first.get("missing") or [] if n in mapping})
+    return {"updated": first.get("updated", 0) + rest.get("updated", 0),
+            "added": rest.get("added", 0)}
+
+
 def purge_categorized_bios() -> dict:
     """Drop from usernames_bio.txt every handle that now has a category, after
     carrying its campaign usage across so the count isn't lost with the row.

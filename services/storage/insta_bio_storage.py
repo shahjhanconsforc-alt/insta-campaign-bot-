@@ -53,7 +53,12 @@ log = mc.log
 # a scrape supplies: every row carries it (0 until first used), bumped by
 # bump_uses(). It has to be listed here or _clean() would strip it straight back off.
 USED_FIELD = "used_count"
-_FIELDS = ("username", "bio", USED_FIELD)
+# Outcome of the LAST campaign attempt on this handle: "sent", "failed" or ""
+# (never attempted). `fail_reason` says why when it failed. Set by
+# set_statuses() when a campaign run ends; the wizard's Failed filter reads it.
+STATUS_FIELD = "campaign_status"
+REASON_FIELD = "fail_reason"
+_FIELDS = ("username", "bio", USED_FIELD, STATUS_FIELD, REASON_FIELD)
 
 # The bio a record carries when the scrape never read one — every scrape now
 # lands a row, so a name collected off the feed/search without visiting its
@@ -84,6 +89,10 @@ def _clean(record: dict) -> dict | None:
             out[USED_FIELD] = max(0, int(record[USED_FIELD]))
         except (TypeError, ValueError):
             pass
+    status = str(record.get(STATUS_FIELD) or "").strip().lower()
+    if status in ("sent", "failed"):
+        out[STATUS_FIELD] = status
+        out[REASON_FIELD] = str(record.get(REASON_FIELD) or "").strip()[:160] if status == "failed" else ""
     return out
 
 
@@ -219,6 +228,45 @@ def bump_uses(names) -> dict:
         log.info("bio store: bumped used_count on %d handle(s) (+%d new) — total %d",
                  bumped, added, len(merged))
         return {"bumped": bumped, "added": added, "total": len(merged)}
+
+
+def set_statuses(mapping) -> dict:
+    """Record each handle's last campaign outcome: `mapping` is
+    {username: (status, reason)} with status "sent" or "failed". A handle not
+    yet stored is added (bio "unknown") so a failed upload-list name can still
+    be found by the Failed filter. Returns {"updated", "added", "total"}."""
+    wanted = {}
+    for key, value in (mapping or {}).items():
+        name = str(key or "").strip().lstrip("@")
+        status, reason = (value if isinstance(value, (tuple, list)) else (value, ""))[:2]
+        status = str(status or "").strip().lower()
+        if name and status in ("sent", "failed"):
+            wanted[name] = (status, str(reason or "")[:160] if status == "failed" else "")
+    with _lock:
+        if not wanted:
+            return {"updated": 0, "added": 0, "total": _count_unsafe()}
+        existing = load_all()
+        by_key: dict[str, dict] = {}
+        for record in existing:
+            c = _clean(record)
+            if c:
+                by_key[c["username"].lower()] = c
+        updated = added = 0
+        for name, (status, reason) in wanted.items():
+            row = by_key.get(name.lower())
+            if row is None:
+                by_key[name.lower()] = {"username": name, "bio": UNKNOWN_BIO, USED_FIELD: 0,
+                                        STATUS_FIELD: status, REASON_FIELD: reason}
+                added += 1
+            else:
+                row[STATUS_FIELD] = status
+                row[REASON_FIELD] = reason
+                updated += 1
+        merged = list(by_key.values())
+        _put(merged)
+        log.info("bio store: campaign status on %d handle(s) (+%d new) — total %d",
+                 updated, added, len(merged))
+        return {"updated": updated, "added": added, "total": len(merged)}
 
 
 def clean() -> dict:

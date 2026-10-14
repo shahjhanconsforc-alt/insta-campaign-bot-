@@ -1383,7 +1383,8 @@ function computeCampaignRows() {
       if (!entry.opened) status = 'failed';
       else if (entry.message?.sent) status = 'sent';
       else if (entry.message?.written) status = 'staged';
-      else status = 'opened';
+      else if (entry.message) status = 'failed';            // composed nothing / not sent
+      else status = run?.current === a.name ? 'processing' : 'failed';
     } else if (run?.current === a.name) {
       status = 'processing';
     }
@@ -1651,7 +1652,8 @@ $('#btn-camp-set-save')?.addEventListener('click', async event => {
    Start, then hands off to the Campaign panel in a running state. */
 const setup = { step: 1, accountId: null, loggedIn: false,
                 allData: [], usernames: [], drafts: [], savedMedia: [], mode: 'text',
-                catRows: [], catHidden: new Set(), catRange: null, usedFilter: null };   // Users step: categorized DB view state
+                catRows: [], catHidden: new Set(), catRange: null, usedFilter: null,
+                failedOnly: false };   // Users step: categorized DB view state
 let setupCatView = null;   // the mounted handles view, so "Use range" can re-render it
 
 /* A row's campaign-usage count vs the used filter: null = any, else an exact match. */
@@ -1659,10 +1661,15 @@ function matchUsed(n, filter) {
   if (filter == null) return true;
   return (Number(n) || 0) === Number(filter);
 }
-/* The pool the range slices: category-ticked, then narrowed by the used filter. */
+/* A row whose LAST campaign attempt failed (search miss, nothing composed, image
+   not attached, not sent). Stamped by the backend when a run ends. */
+function isFailedRow(r) { return String(r.campaign_status || '').toLowerCase() === 'failed'; }
+/* The pool the range slices: category-ticked, then narrowed by the used and
+   failed filters. */
 function setupCatPool() {
   let rows = setup.catRows.filter(r => !setup.catHidden.has(String(r.category || '').trim()));
   if (setup.usedFilter != null) rows = rows.filter(r => matchUsed(r.used_count, setup.usedFilter));
+  if (setup.failedOnly) rows = rows.filter(isFailedRow);
   return rows;
 }
 
@@ -1680,6 +1687,19 @@ function setupUsedSection() {
         <span class="hint">Off = any. Tick and set the count, then Apply.</span>`;
       body.querySelector('.cat-used-on').checked = setup.usedFilter != null;
       if (setup.usedFilter != null) body.querySelector('.cat-used-n').value = setup.usedFilter;
+    },
+  };
+}
+function setupFailedSection() {
+  return {
+    id: 'failed', title: 'Failed', open: false,
+    build: (body) => {
+      const n = setup.catRows.filter(isFailedRow).length;
+      body.innerHTML = `<label class="cat-used-row">
+          <input type="checkbox" class="cat-failed-on"> only failed handles
+        </label>
+        <span class="hint">${n} handle${n === 1 ? '' : 's'} failed in the last campaign that reached ${n === 1 ? 'it' : 'them'} — not sent (search miss, image not attached, message not written). Tick, then Apply.</span>`;
+      body.querySelector('.cat-failed-on').checked = !!setup.failedOnly;
     },
   };
 }
@@ -1708,7 +1728,8 @@ function setupApplyFilters(apply) {
   const on = box?.querySelector('.cat-used-on')?.checked;
   const n = Math.max(0, Math.floor(Number(box?.querySelector('.cat-used-n')?.value) || 0));
   setup.usedFilter = on ? n : null;
-  const poolN = setupCatPool().length;                     // category-ticked + used
+  setup.failedOnly = !!box?.querySelector('.cat-failed-on')?.checked;
+  const poolN = setupCatPool().length;                     // category-ticked + used + failed
   const from = Math.max(1, Math.floor(Number(box?.querySelector('.cat-range-from')?.value) || 1));
   const to = Math.min(poolN, Math.max(from, Math.floor(Number(box?.querySelector('.cat-range-to')?.value) || poolN)));
   setup.catRange = (from <= 1 && to >= poolN) ? null : { from, to };   // full span = no slice
@@ -2097,12 +2118,13 @@ function renderSetupUsers() {
       rowFilter: rows => {
         let r = rows;
         if (setup.usedFilter != null) r = r.filter(row => matchUsed(row.used_count, setup.usedFilter));
+        if (setup.failedOnly) r = r.filter(isFailedRow);
         if (setup.catRange) r = r.slice(setup.catRange.from - 1, setup.catRange.to);
         return r;
       },
       onChange: applySetupCatSelection,               // fires on Apply (and initial mount)
       onApply: setupApplyFilters,
-      sideSections: [setupUsedSection(), setupRangeSection()],
+      sideSections: [setupUsedSection(), setupFailedSection(), setupRangeSection()],
     });
     return;
   }
@@ -2167,6 +2189,7 @@ async function loadSetupUsersFromDb() {
     setup.catHidden = new Set();                        // all categories ticked by default
     setup.catRange = null;                              // fresh load → no range applied
     setup.usedFilter = null;                              // …and no used-count filter
+    setup.failedOnly = false;
     renderSetupUsers();                                 // mounts the view; onChange sets the selection
   } catch (e) { toast(e.message, true); }
 }
@@ -2174,7 +2197,7 @@ async function loadSetupUsersFromDb() {
 $('#btn-setup-load-data')?.addEventListener('click', async () => {
   const btn = $('#btn-setup-load-data');
   if (btn.classList.contains('on')) {                 // clear the fetched users
-    setup.catRows = []; setup.catHidden = new Set(); setup.catRange = null; setup.usedFilter = null;
+    setup.catRows = []; setup.catHidden = new Set(); setup.catRange = null; setup.usedFilter = null; setup.failedOnly = false;
     setup.allData = []; setup.usernames = [];
     setUsersNote();                                    // back to the empty state, range hidden
     btn.classList.remove('on');
@@ -2204,7 +2227,7 @@ $('#setup-user-fileinput')?.addEventListener('change', async e => {
   }
   const text = await file.text();
   const names = text.split(/[\r\n,;]+/).map(s => s.trim().replace(/^@/, '')).filter(Boolean);
-  setup.catRows = []; setup.catRange = null; setup.usedFilter = null;   // switching to a file source
+  setup.catRows = []; setup.catRange = null; setup.usedFilter = null; setup.failedOnly = false;   // switching to a file source
   setSetupUsersSource(names, `name(s) from ${file.name}`);
   $('#btn-setup-load-data')?.classList.remove('on');   // source is now the file, not Database
 });
@@ -5057,7 +5080,8 @@ function mountHandlesView(container, rows, opts = {}) {
             ${view.map((r, i) => `<tr>
               <td class="dc-num">${i + 1}</td>
               <td class="dc-user"><button type="button" class="name-chip" data-copy-target="${esc(r.username || '')}" title="Copy ${esc(r.username || '')}">${esc(r.username || '')}</button>${
-                Number(r.used_count) > 0 ? `<span class="dc-used" title="Used ${Number(r.used_count)}× in campaigns (staged/sent)">×${Number(r.used_count)}</span>` : ''}</td>
+                Number(r.used_count) > 0 ? `<span class="dc-used" title="Used ${Number(r.used_count)}× in campaigns (staged/sent)">×${Number(r.used_count)}</span>` : ''}${
+                String(r.campaign_status || '').toLowerCase() === 'failed' ? `<span class="dc-failed" title="${esc('Last campaign: not sent' + (r.fail_reason ? ' — ' + r.fail_reason : ''))}">failed</span>` : ''}</td>
               <td class="dc-bio" title="${cell(r.bio)}">${r.bio ? cell(r.bio) : '<span class="dc-empty">—</span>'}</td>
               ${withCats ? `<td class="dc-cat">${r.category ? `<span class="dc-cat-tag">${cell(r.category)}</span>` : '<span class="dc-empty">—</span>'}</td>` : ''}
             </tr>`).join('')}

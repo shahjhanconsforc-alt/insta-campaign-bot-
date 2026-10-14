@@ -3266,6 +3266,36 @@ async def search_usernames(
                 activity.log("visit", f"Recorded campaign use of {len(used)} handle(s)", "ok")
         except Exception as exc:  # noqa: BLE001 — usage tracking must never sink the run
             activity.log("visit", f"Couldn't record campaign usage: {exc}", "warn")
+        # …and how each reached handle ENDED: "sent" (or staged when Press ENTER
+        # is off), or "failed" with the reason — search miss, nothing composed,
+        # image not attached, send not issued. Names the run never reached (Stop)
+        # are left as they were.
+        try:
+            sent_names, failed_names = [], {}
+            for r in results:
+                name = r.get("query")
+                msg = r.get("message")
+                if not name:
+                    continue
+                if r.get("error") or not r.get("opened"):
+                    failed_names[name] = r.get("error") or "no results"
+                elif msg is None:
+                    continue                       # stopped before this one was messaged
+                elif msg.get("sent") or (msg.get("written") and not do_send):
+                    sent_names.append(name)
+                else:
+                    failed_names[name] = msg.get("reason") or "message not sent"
+            if sent_names or failed_names:
+                from backend import db
+
+                await asyncio.to_thread(db.record_campaign_outcomes, sent_names, failed_names)
+                activity.log(
+                    "visit",
+                    f"Recorded outcomes: {len(sent_names)} sent, {len(failed_names)} failed",
+                    "ok" if not failed_names else "warn",
+                )
+        except Exception as exc:  # noqa: BLE001
+            activity.log("visit", f"Couldn't record campaign outcomes: {exc}", "warn")
 
     # Counts describe what was ATTEMPTED, not the queue: a run stopped after 3
     # of 53 has not "missed" 50 — it never reached them.
