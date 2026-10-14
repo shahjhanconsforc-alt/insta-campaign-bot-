@@ -82,6 +82,39 @@ if not (os.name == "posix" and hasattr(os, "geteuid") and os.geteuid() == 0):
 _IS_LINUX = sys.platform.startswith("linux")
 
 
+def _clear_stale_profile_lock(profile: Path) -> None:
+    """Remove a Chromium profile lock left behind by a browser that was killed.
+
+    Chromium guards a profile with SingletonLock, a symlink to "<hostname>-<pid>".
+    When the process dies without cleanup (the container was recreated, the VM
+    rebooted, the server was killed), the link stays and the next Chrome exits at
+    once with "profile locked" — the window flashes open and closes. If the lock's
+    process is not a live Chrome on this machine, the lock is stale: drop it."""
+    if not _IS_LINUX:
+        return  # Windows Chrome uses a different lock; nothing to do
+    lock = profile / "SingletonLock"
+    try:
+        target = os.readlink(lock)
+    except OSError:
+        return  # no lock, or not a symlink
+    host, _, pid = target.rpartition("-")
+    alive = False
+    try:
+        if host == os.uname().nodename and pid.isdigit() and Path(f"/proc/{pid}").exists():
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                alive = b"chrom" in fh.read().lower()
+    except OSError:
+        alive = False
+    if alive:
+        return
+    for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        try:
+            (profile / name).unlink()
+        except OSError:
+            pass
+    activity.log("browser", f"Removed stale Chrome profile lock in {profile.name} ({target})", "warn")
+
+
 def _check_display() -> None:
     """A headed Chrome on Linux needs a desktop session to draw on.
 
@@ -249,6 +282,7 @@ async def open_browser(url: str | None = None, profile: Path | None = None) -> d
         # suspicious login on Instagram). None when unset, which Playwright ignores.
         proxy = config.playwright_proxy()
         _check_display()
+        _clear_stale_profile_lock(wanted)
         try:
             context = await _playwright.chromium.launch_persistent_context(
                 user_data_dir=str(wanted),
