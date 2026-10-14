@@ -16,6 +16,7 @@ click "Open Chrome" once, then navigate/screenshot against the same window.
 import asyncio
 import os
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -78,6 +79,25 @@ _AUTOMATION_ARGS = ["--enable-automation"]
 # to start WITH the sandbox ("Chromium sandboxing failed"), so keep the default there.
 if not (os.name == "posix" and hasattr(os, "geteuid") and os.geteuid() == 0):
     _AUTOMATION_ARGS.append("--no-sandbox")
+_IS_LINUX = sys.platform.startswith("linux")
+
+
+def _check_display() -> None:
+    """A headed Chrome on Linux needs a desktop session to draw on.
+
+    Started from SSH, a systemd service or a container, DISPLAY is unset and
+    Chrome dies with "Missing X server or $DISPLAY" — fail early with a hint."""
+    if config.PLAYWRIGHT_HEADLESS or not _IS_LINUX:
+        return
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return
+    raise RuntimeError(
+        "PLAYWRIGHT_HEADLESS=false but no display is available (DISPLAY / "
+        "WAYLAND_DISPLAY unset). Start the server from a terminal INSIDE the "
+        "Ubuntu desktop session (not over SSH, Docker or a system service), or "
+        "export DISPLAY=:0 and XAUTHORITY=/run/user/<uid>/gdm/Xauthority for the "
+        "logged-in desktop user. Set PLAYWRIGHT_HEADLESS=true to run hidden."
+    )
 _CLEAN_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-default-browser-check",
@@ -228,6 +248,7 @@ async def open_browser(url: str | None = None, profile: Path | None = None) -> d
         # One proxy for the whole session (no mid-session rotation — that reads as a
         # suspicious login on Instagram). None when unset, which Playwright ignores.
         proxy = config.playwright_proxy()
+        _check_display()
         try:
             context = await _playwright.chromium.launch_persistent_context(
                 user_data_dir=str(wanted),
@@ -290,15 +311,43 @@ def _proxy_label(proxy: dict | None) -> str:
 
 def _launch_hint(exc: Exception) -> str:
     text = str(exc)
-    hint = (
-        f"Could not launch Chrome (channel={config.PLAYWRIGHT_CHANNEL!r}): {text}\n"
-    )
-    if "executable doesn't exist" in text.lower() or "channel" in text.lower():
+    low = text.lower()
+    channel = config.PLAYWRIGHT_CHANNEL
+    hint = f"Could not launch Chrome (channel={channel!r}): {text}\n"
+    if "missing x server" in low or "$display" in low or "cannot open display" in low:
         hint += (
-            'Fix: run "playwright install chrome", or set PLAYWRIGHT_CHANNEL=chromium '
-            "in .env to use Playwright's bundled build."
+            "No display: a headed Chrome needs the desktop session. Start the server "
+            "from a terminal inside the Ubuntu desktop (not SSH/Docker/systemd), or "
+            "export DISPLAY=:0 for the logged-in user. Or set PLAYWRIGHT_HEADLESS=true."
         )
-    elif "profile" in text.lower() or "lock" in text.lower():
+    elif "executable doesn't exist" in low or "please run the following command" in low:
+        if channel == "chromium" or not channel:
+            hint += (
+                "Playwright's bundled Chromium is not installed for this Python. Run:\n"
+                "  python -m playwright install chromium\n"
+                "  sudo python -m playwright install-deps chromium   (Linux system libs)"
+            )
+        else:
+            hint += (
+                f'Google Chrome ({channel}) is not installed. Run "python -m playwright '
+                f'install {channel}", install Chrome, or set PLAYWRIGHT_CHANNEL=chromium '
+                "in .env and run \"python -m playwright install chromium\"."
+            )
+    elif "without --no-sandbox" in low or "running as root" in low:
+        hint += (
+            "Chrome refuses to run as root without a sandbox. Run the server as a "
+            "normal desktop user instead of root/sudo."
+        )
+    elif "shared libraries" in low or "cannot open shared object" in low:
+        hint += (
+            "Missing Linux system libraries. Run: sudo python -m playwright install-deps chromium"
+        )
+    elif "channel" in low:
+        hint += (
+            f'Unknown channel {channel!r}. Use PLAYWRIGHT_CHANNEL=chrome (installed Google '
+            "Chrome) or PLAYWRIGHT_CHANNEL=chromium (Playwright's bundled build)."
+        )
+    elif "profile" in low or "lock" in low or "singletonlock" in low:
         hint += (
             "That profile looks locked — another Chrome is already using it. Close it, "
             "or point PLAYWRIGHT_USER_DATA_DIR at a different folder in .env."

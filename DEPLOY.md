@@ -63,6 +63,47 @@ docker compose up -d minio
 python -m backend.main
 ```
 
+## Ubuntu Desktop VM — headed, you SEE the browser (no Docker)
+
+Docker always runs headless (no screen inside a container). To watch the
+automation browser on an Ubuntu **Desktop** VM, run the app directly on the
+desktop instead:
+
+```bash
+# 1. deps, as the normal desktop user — NOT root/sudo (Chrome refuses to run as root)
+sudo apt install -y python3-venv
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m playwright install chromium            # bundled Chromium for THIS Python
+sudo .venv/bin/python -m playwright install-deps chromium   # system libs (once)
+
+# 2. .env — visible window, bundled Chromium
+cp .env.example .env
+#    PLAYWRIGHT_HEADLESS=false
+#    PLAYWRIGHT_CHANNEL=chromium        (or install Google Chrome and use "chrome")
+#    MINIO_URL=...                       (point at your MinIO)
+
+# 3. start it from a terminal INSIDE the desktop session (so DISPLAY is set)
+python -m backend.main
+```
+
+Why these matter:
+
+- **No display** (`Missing X server or $DISPLAY`): the server was started over SSH,
+  from a container, or as a system service. Those shells have no `DISPLAY`. Open a
+  terminal on the VM's desktop and start it there, or export the desktop user's
+  `DISPLAY=:0` (and `XAUTHORITY`) in the service unit.
+- **`Executable doesn't exist`**: Playwright's Chromium is not downloaded for the
+  Python you are running. Run `python -m playwright install chromium` with the same
+  interpreter (inside the venv). Switching `PLAYWRIGHT_CHANNEL` to `chrome` instead
+  needs Google Chrome installed on the VM.
+- **`Running as root without --no-sandbox`**: run as a regular user, not root.
+- **Autostart with the desktop** (optional): add `python -m backend.main` as a
+  Startup Application in GNOME, which runs it inside the graphical session with
+  `DISPLAY` already set.
+- The desktop-cursor feature works here too: on Linux it uses `xdotool`/`xclip`
+  (`backend/automation/cursor_x11.py`), so run `sudo apt install -y xdotool xclip x11-utils`.
+
 ## Running the app without Docker
 
 ```bash
