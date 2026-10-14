@@ -20,6 +20,9 @@ RUN apt-get update \
 # container, everything else runs on Playwright which works headless).
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+# Google Chrome stable alongside the bundled Chromium: profiles saved from a desktop
+# Chrome (newer than Playwright's Chromium) only open in the same browser generation.
+RUN python -m playwright install --with-deps chrome && rm -rf /var/lib/apt/lists/*
 
 # App code (frontend/ is served by the same server — see backend/main.py).
 COPY . .
@@ -31,7 +34,7 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=4000 \
     ENV=production \
     PLAYWRIGHT_HEADLESS=true \
-    PLAYWRIGHT_CHANNEL=chromium
+    PLAYWRIGHT_CHANNEL=chrome
 
 EXPOSE 4000
 

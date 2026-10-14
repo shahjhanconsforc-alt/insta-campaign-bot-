@@ -25,7 +25,7 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET:-insta-bot-usernames}
       # No display in a container: headless, bundled Chromium.
       PLAYWRIGHT_HEADLESS: "true"
-      PLAYWRIGHT_CHANNEL: chromium
+      PLAYWRIGHT_CHANNEL: ${PLAYWRIGHT_CHANNEL:-chrome}
       PLAYWRIGHT_CLEAN_LAUNCH: "true"
       IG_USERNAME: ${IG_USERNAME:-}
       IG_PASSWORD: ${IG_PASSWORD:-}

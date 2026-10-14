@@ -381,10 +381,18 @@ def _launch_hint(exc: Exception) -> str:
             f'Unknown channel {channel!r}. Use PLAYWRIGHT_CHANNEL=chrome (installed Google '
             "Chrome) or PLAYWRIGHT_CHANNEL=chromium (Playwright's bundled build)."
         )
-    elif "profile" in low or "lock" in low or "singletonlock" in low:
+    elif "singletonlock" in low or "profile is in use" in low or "already in use" in low:
         hint += (
             "That profile looks locked — another Chrome is already using it. Close it, "
             "or point PLAYWRIGHT_USER_DATA_DIR at a different folder in .env."
+        )
+    elif "browser has been closed" in low or "target closed" in low:
+        hint += (
+            "Chrome started and exited at once. Most common cause: the profile was created by a "
+            "NEWER Chrome than the one launching it (e.g. a session saved from Windows Chrome 150 "
+            "opened by Playwright's bundled Chromium 131) — Chrome refuses to downgrade a profile. "
+            "Use the same browser generation (PLAYWRIGHT_CHANNEL=chrome with Google Chrome "
+            "installed, or `playwright install chrome` in the image), or start a fresh profile."
         )
     else:
         hint += "Check that Chrome is installed and no other process holds the profile."
