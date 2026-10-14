@@ -4563,6 +4563,36 @@ COMMENT_SCROLL_STEP = (0.55, 0.95)    # fraction of the window per scroll
 COMMENT_SCROLL_PAUSE = (0.8, 1.6)     # seconds per glide
 
 
+# Interstitials that cover the feed: Instagram's "You've reached your daily
+# limit" sheet, the notifications prompt, "Add Instagram to your home screen"…
+# Each has a close/dismiss control; nothing else on the feed matches these.
+_FEED_OVERLAY_SEL = (
+    'svg[aria-label="Close"]', 'svg[aria-label="close"]',
+    'button:has-text("Not now")', 'button:has-text("Not Now")',
+    'button:has-text("Dismiss")', 'button:has-text("OK")',
+)
+
+
+async def _dismiss_feed_overlays(page) -> int:
+    """Close whatever sheet/dialog is covering the feed. Returns how many were
+    dismissed. Best-effort and quick: nothing there costs ~0.2 s."""
+    closed = 0
+    for sel in _FEED_OVERLAY_SEL:
+        loc = page.locator(sel).first
+        try:
+            if not await loc.count() or not await loc.is_visible():
+                continue
+            anc = loc.locator("xpath=ancestor-or-self::*[@role='button' or self::button][1]")
+            target = anc.first if await anc.count() else loc
+            await target.click(timeout=3000)
+            closed += 1
+            activity.log("visit", f"Comments: dismissed an overlay ({sel})", "ok")
+            await page.wait_for_timeout(1200)
+        except Exception:  # noqa: BLE001
+            continue
+    return closed
+
+
 def comments_progress(account_id: int | None = None) -> dict:
     """Live counters of the comments campaign for one account (or all)."""
     if account_id is not None:
@@ -4714,12 +4744,16 @@ async def comments_campaign(account_id: int | None = None,
     try:
         await _ensure_home(page)
         await page.wait_for_timeout(2500)
+        await _dismiss_feed_overlays(page)
         idle_scrolls = 0
         while True:
             await control.checkpoint()
             article, key = await _next_feed_post(page, seen)
             if article is None:
-                # Nothing new on screen: scroll on; after a while, refresh.
+                # Nothing new on screen: close any sheet covering the feed,
+                # scroll on; after a while, refresh.
+                if await _dismiss_feed_overlays(page):
+                    continue
                 idle_scrolls += 1
                 state["scrolls"] += 1
                 await _feed_scroll_step(page, COMMENT_SCROLL_STEP, COMMENT_SCROLL_PAUSE)
@@ -4730,6 +4764,7 @@ async def comments_campaign(account_id: int | None = None,
                     activity.log("visit", "Comments: feed shows nothing new — refreshing Home", "warn")
                     await _refresh_feed(page)
                     await page.wait_for_timeout(2500)
+                    await _dismiss_feed_overlays(page)
                 continue
             idle_scrolls = 0
             seen.add(key)
