@@ -758,7 +758,29 @@ async def comments_campaign(body: CommentsCampaignBody):
     except RuntimeError as exc:
         raise HTTPException(409, str(exc)) from exc
 
-    messages = [m for m in (body.messages or []) if str(m).strip()]
+    # The comment pool: the campaign's saved message drafts in the store (the
+    # same ones the DM campaign uses), skipping disabled ones. Messages sent by
+    # the panel are only a fallback when the store holds none.
+    source = "db"
+    messages: list[str] = []
+    try:
+        from backend import db
+
+        for d in db.get_sms_drafts() or []:
+            if isinstance(d, dict):
+                if d.get("disabled"):
+                    continue
+                text = d.get("text") or d.get("message") or d.get("body") or ""
+            else:
+                text = str(d or "")
+            text = " ".join(str(text).split())
+            if text:
+                messages.append(text)
+    except Exception as exc:  # noqa: BLE001 — store down: fall back below
+        activity.log("visit", f"Comments: couldn't read the saved drafts ({exc})", "warn")
+    if not messages:
+        messages = [" ".join(str(m).split()) for m in (body.messages or []) if str(m).strip()]
+        source = "panel" if messages else "builtin"
 
     async def _run():
         try:
@@ -769,7 +791,7 @@ async def comments_campaign(body: CommentsCampaignBody):
 
     asyncio.create_task(_run())
     return {"started": True, "account_id": account_id, "messages": len(messages),
-            "account": _account_name(account_id)}
+            "source": source, "account": _account_name(account_id)}
 
 
 @router.get("/comments-progress")

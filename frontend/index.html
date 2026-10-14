@@ -94,6 +94,11 @@
             <button class="btn btn-sm" id="btn-setup-add-acct" type="button">+ Add account</button>
             <span class="hint" id="setup-login-note"></span>
           </div>
+          <div class="wiz-comments-row">
+            <button class="btn btn-sm" id="btn-comments-campaign" type="button" disabled
+                    title="In each logged-in account's window: Home → scroll → like → comment on post after post, until ⏹ Stop. Comments are random picks from the saved Database messages.">💬 Comments campaign</button>
+            <span class="hint" id="comments-campaign-note">Enabled once an account is logged in. Comments are picked at random from the saved Database messages (the same drafts the campaign uses). Runs until ⏹ Stop.</span>
+          </div>
         </section>
 
         <!-- STEP 2: Users — upload a file or load from Database; the range
@@ -156,11 +161,7 @@
           <div class="wiz-checklist" id="setup-summary"></div>
           <button class="btn btn-primary btn-lg" id="btn-setup-start" type="button" disabled>🚀 Start Campaign</button>
           <p class="hint">Starts the run and opens the live Campaign view.</p>
-          <div class="wiz-comments-row">
-            <button class="btn btn-lg" id="btn-comments-campaign" type="button" disabled
-                    title="In each logged-in account's window: Home → scroll → like → comment (a random message from step 3) on post after post, until ⏹ Stop">💬 Comments campaign</button>
-            <p class="hint" id="comments-campaign-note">Needs a logged-in account (step 1). Messages from step 3 are used as comments; without any, a built-in bank of short positive comments is used. Runs until you press ⏹ Stop.</p>
-          </div>
+
         </section>
       </div>
 

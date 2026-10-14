@@ -1084,8 +1084,9 @@ input:focus, textarea:focus {
   width: min(430px, 80vw); height: 1px; background: var(--line);
 }
 #btn-setup-start:disabled { opacity: .5; cursor: not-allowed; }
-.wiz-comments-row { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line, #dfe3ea); }
-.wiz-comments-row #btn-comments-campaign { min-width: 260px; }
+.wiz-comments-row { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line, #dfe3ea);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wiz-comments-row #btn-comments-campaign { min-width: 180px; }
 .wiz-comments-row #btn-comments-campaign.live { background: #fff7ed; border-color: #fdba74; color: #9a3412; }
 .wiz-comments-row .hint { margin-top: 6px; }
 /* Users step: MinIO source and Upload side by side, + a preview of the names. */
