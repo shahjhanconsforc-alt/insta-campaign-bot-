@@ -4619,9 +4619,18 @@ async def _post_key(article) -> str:
         return ""
 
 
+async def _mark_post_done(article) -> None:
+    """Stamp the post element so it is never picked again, whatever its key."""
+    try:
+        await article.evaluate("el => el.setAttribute('data-cc-done', '1')")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _next_feed_post(page, seen: set[str]):
-    """The first <article> not handled yet, scrolled into view. None if the
-    feed shows nothing new right now."""
+    """The first FEED <article> not handled yet, scrolled into view. Posts
+    rendered inside the open post dialog and posts already stamped as done are
+    skipped. None if the feed shows nothing new right now."""
     posts = page.locator(POST_SEL)
     try:
         n = await posts.count()
@@ -4629,6 +4638,13 @@ async def _next_feed_post(page, seen: set[str]):
         return None, ""
     for i in range(n):
         art = posts.nth(i)
+        try:
+            skip = await art.evaluate(
+                "el => el.hasAttribute('data-cc-done') || !!el.closest('[role=\"dialog\"]')")
+        except Exception:  # noqa: BLE001
+            continue
+        if skip:
+            continue
         key = await _post_key(art)
         if not key or key in seen:
             continue
@@ -4656,6 +4672,50 @@ async def _like_post(page, article) -> str:
     except Exception:  # noqa: BLE001
         pass
     return "missing"
+
+
+async def _post_dialog_open(page) -> bool:
+    try:
+        dialog = page.locator('div[role="dialog"]').last
+        return bool(await dialog.count()) and await dialog.is_visible()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _close_post_dialog(page) -> bool:
+    """Close the post dialog the Comment click opened, and make sure the feed
+    is back. Tries the X button, Escape, a click outside the panel, then
+    browser Back. True when no dialog is left."""
+    for attempt in range(4):
+        if not await _post_dialog_open(page) and "/p/" not in page.url and "/reel/" not in page.url:
+            return True
+        try:
+            if attempt == 0:
+                x = page.locator('svg[aria-label="Close"], svg[aria-label="close"]').last
+                if await x.count() and await x.is_visible():
+                    anc = x.locator("xpath=ancestor-or-self::*[@role='button' or self::button][1]")
+                    await (anc.first if await anc.count() else x).click(timeout=3000)
+                else:
+                    await page.keyboard.press("Escape")
+            elif attempt == 1:
+                await page.keyboard.press("Escape")
+            elif attempt == 2:
+                # click the dim backdrop, far from the panel (left edge, mid-height)
+                h = await page.evaluate("() => window.innerHeight")
+                await page.mouse.click(12, int(h / 2))
+            else:
+                await page.go_back(wait_until="domcontentloaded")
+        except Exception:  # noqa: BLE001
+            pass
+        await page.wait_for_timeout(900)
+    if await _post_dialog_open(page) or "/p/" in page.url or "/reel/" in page.url:
+        activity.log("visit", "Comments: post panel would not close — reopening Home", "warn")
+        try:
+            await page.goto(HOME, wait_until="domcontentloaded")
+            await page.wait_for_timeout(2500)
+        except Exception:  # noqa: BLE001
+            return False
+    return True
 
 
 async def _comment_on_post(page, article, text: str) -> bool:
@@ -4712,12 +4772,10 @@ async def _comment_on_post(page, article, text: str) -> bool:
             pass
         return posted
     finally:
-        if opened_dialog:
-            try:
-                await page.keyboard.press("Escape")
-                await page.wait_for_timeout(600)
-            except Exception:  # noqa: BLE001
-                pass
+        # Always leave the feed in front: close the panel the Comment click
+        # opened (X / Escape / click outside / Back), verified.
+        if opened_dialog or await _post_dialog_open(page):
+            await _close_post_dialog(page)
 
 
 async def comments_campaign(account_id: int | None = None,
@@ -4768,6 +4826,7 @@ async def comments_campaign(account_id: int | None = None,
                 continue
             idle_scrolls = 0
             seen.add(key)
+            await _mark_post_done(article)           # never this post again
             state["posts"] += 1
             state["last"] = key
 
@@ -4796,6 +4855,10 @@ async def comments_campaign(account_id: int | None = None,
             else:
                 state["skipped"] += 1
                 activity.log("visit", f"Comments: no comment box on {key} — skipped", "warn")
+
+            # the panel must be gone before moving on — otherwise the next
+            # "post" would be this one again
+            await _close_post_dialog(page)
 
             # the peaceful part: a long, varied gap before the next post
             await control.sleep(random.uniform(*COMMENT_GAP_S))
