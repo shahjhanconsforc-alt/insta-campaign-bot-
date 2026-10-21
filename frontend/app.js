@@ -2463,7 +2463,7 @@ async function pollCommentsProgress() {
       const p = await api(`/automation/comments-progress?account_id=${id}`);
       const who = accountById(id)?.account_name || `#${id}`;
       if (p.running) anyRunning = true;
-      parts.push(`${who}: ${p.posts || 0} posts · ❤️ ${p.liked || 0} · 💬 ${p.commented || 0}` +
+      parts.push(`${who}: ${p.posts || 0} posts · ❤️ ${p.liked || 0} · 💬 ${p.commented || 0} · ➕ ${p.followed || 0} followed` +
                  (p.skipped ? ` · skipped ${p.skipped}` : '') + (p.error ? ` · ⚠ ${p.error}` : '') +
                  (p.running ? '' : ' · ended'));
     } catch (e) { parts.push(`#${id}: ${e.message}`); }

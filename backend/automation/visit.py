@@ -4778,24 +4778,71 @@ async def _comment_on_post(page, article, text: str) -> bool:
             await _close_post_dialog(page)
 
 
+async def _post_author(article) -> str | None:
+    """The username of the post's author, from the header link (`/<name>/`)."""
+    try:
+        return await article.evaluate("""el => {
+          for (const a of el.querySelectorAll('header a[href], a[href][role="link"]')) {
+            const p = (a.getAttribute('href') || '').split('?')[0].split('/').filter(Boolean);
+            if (p.length === 1 && /^[A-Za-z0-9._]{1,30}$/.test(p[0])
+                && !['explore', 'reels', 'stories', 'p', 'reel'].includes(p[0])) return p[0];
+          }
+          return null;
+        }""")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _follow_on_profile(page, name: str) -> str:
+    """Open @name's profile in a tab of its own, press its Follow button, close
+    the tab and put the feed back in front. Returns what `_click_follow` said,
+    or 'no-profile' when the profile would not load."""
+    tab = await page.context.new_page()
+    try:
+        await tab.goto(f"{HOME}{name}/", wait_until="domcontentloaded")
+        # the action row renders after the header — wait for Follow/Following
+        for _ in range(16):
+            if await tab.evaluate(_FIND_FOLLOW_JS) != "none":
+                break
+            await tab.wait_for_timeout(500)
+        await tab.wait_for_timeout(random.randint(800, 1800))   # look at it first
+        return await _click_follow(tab)
+    except Exception as exc:  # noqa: BLE001 — one profile must not end the run
+        activity.log("visit", f"Comments: couldn't open @{name}: {_one_line(exc)}", "warn")
+        return "no-profile"
+    finally:
+        await tab.wait_for_timeout(random.randint(900, 1800))
+        try:
+            await tab.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await page.bring_to_front()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def comments_campaign(account_id: int | None = None,
-                            messages: list[str] | None = None) -> dict:
-    """HOME → scroll → like → comment, until Stop is pressed.
+                            messages: list[str] | None = None,
+                            follow: bool = True) -> dict:
+    """HOME → scroll → like → comment → follow, until Stop is pressed.
 
     Walks the home feed post by post: scrolls to the next unseen post, reads it
     for a moment, likes it, types one random message from `messages` (the
-    campaign's drafts; the built-in bank when none) and posts it, waits a
+    campaign's drafts; the built-in bank when none) and posts it, then (with
+    `follow`) opens the author's profile and presses its Follow button, waits a
     human-sized gap, scrolls on. Never ends on its own — a stalled feed is
     refreshed — so the Stop button is how it finishes."""
     page = account_page(account_id)
     state = {
         "running": True, "account_id": account_id, "posts": 0, "liked": 0,
-        "commented": 0, "skipped": 0, "scrolls": 0, "refreshes": 0,
-        "last": None, "last_comment": None, "error": None,
+        "commented": 0, "followed": 0, "skipped": 0, "scrolls": 0, "refreshes": 0,
+        "last": None, "last_comment": None, "last_followed": None, "error": None,
         "started_at": time.strftime("%H:%M:%S"),
     }
     _comments[account_id] = state
     seen: set[str] = set()
+    visited: set[str] = {(_account_username(account_id) or "").lower()}   # never follow ourselves
     pool = [m for m in (messages or []) if str(m).strip()]
     activity.log("visit", f"Comments campaign started ({len(pool) or len(REEL_COMMENTS)} message(s)) — HOME → scroll → like → comment", "ok")
 
@@ -4838,6 +4885,9 @@ async def comments_campaign(account_id: int | None = None,
                 state["liked"] += 1
             activity.log("visit", f"Comments: post {state['posts']} {key} — like: {liked}", "ok")
 
+            # who posted it — read now, while the post is certainly on the page
+            author = await _post_author(article) if follow else None
+
             await control.sleep(random.uniform(1.0, 2.5))
             await control.checkpoint()
             text = _pick_comment_message(pool)
@@ -4860,6 +4910,19 @@ async def comments_campaign(account_id: int | None = None,
             # "post" would be this one again
             await _close_post_dialog(page)
 
+            # follow the author, by the Follow button on their profile — once
+            # per author per run, however many of their posts the feed shows
+            if author and author.lower() not in visited:
+                visited.add(author.lower())
+                await control.sleep(random.uniform(1.0, 2.5))
+                await control.checkpoint()
+                result = await _follow_on_profile(page, author)
+                if result == "followed":
+                    state["followed"] += 1
+                    state["last_followed"] = author
+                activity.log("visit", f"Comments: @{author} — follow: {result}",
+                             "ok" if result in ("followed", "already-following") else "warn")
+
             # the peaceful part: a long, varied gap before the next post
             await control.sleep(random.uniform(*COMMENT_GAP_S))
             await control.checkpoint()
@@ -4868,7 +4931,8 @@ async def comments_campaign(account_id: int | None = None,
             await control.sleep(random.uniform(0.6, 1.5))
     except control.Stopped:
         activity.log("visit", f"Comments campaign stopped — {state['posts']} post(s): "
-                     f"{state['liked']} liked, {state['commented']} commented", "warn")
+                     f"{state['liked']} liked, {state['commented']} commented, "
+                     f"{state['followed']} followed", "warn")
     except Exception as exc:  # noqa: BLE001
         state["error"] = str(exc).split("\nCall log:")[0].strip()[:200]
         activity.log("visit", f"Comments campaign ended with an error: {state['error']}", "error")

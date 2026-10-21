@@ -736,6 +736,7 @@ async def search_campaign(body: SearchCampaignBody):
 class CommentsCampaignBody(BaseModel):
     account_id: int | None = None
     messages: list[str] = []
+    follow: bool = True          # follow each post's author on their profile
 
 
 @router.post("/comments-campaign")
@@ -785,7 +786,8 @@ async def comments_campaign(body: CommentsCampaignBody):
     async def _run():
         try:
             with tasks.claim(account_id, "Comments campaign"):
-                await visitor.comments_campaign(account_id=account_id, messages=messages)
+                await visitor.comments_campaign(account_id=account_id, messages=messages,
+                                                follow=body.follow)
         except Exception as exc:  # noqa: BLE001 — logged by the job itself
             activity.log("visit", f"Comments campaign task ended: {exc}", "warn")
 
