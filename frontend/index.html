@@ -96,7 +96,11 @@
           </div>
           <div class="wiz-comments-row">
             <button class="btn btn-sm" id="btn-comments-campaign" type="button" disabled
-                    title="In each logged-in account's window: Home → scroll → like → comment on post after post, until ⏹ Stop. Comments are random picks from the saved Database messages.">💬 Comments campaign</button>
+                    title="In each logged-in account's window: Home (or Reels) → scroll → like → comment → follow, post after post, until ⏹ Stop. Comments are random picks from the saved Database messages.">💬 Comments campaign</button>
+            <select id="comments-surface" title="Where the Comments campaign runs">
+              <option value="home">Home feed</option>
+              <option value="reels">Reels (videos)</option>
+            </select>
             <span class="hint" id="comments-campaign-note">Enabled once an account is logged in. Comments are picked at random from the saved Database messages (the same drafts the campaign uses). Runs until ⏹ Stop.</span>
           </div>
         </section>

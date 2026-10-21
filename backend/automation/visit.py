@@ -4822,12 +4822,188 @@ async def _follow_on_profile(page, name: str) -> str:
             pass
 
 
+# ── Reels: scroll → like → comment → follow, one reel at a time ───────────
+#
+# Instagram's /reels/ page shows one reel at a time in a vertical scroller and
+# keeps a few neighbours rendered above and below it, so "the first Like on the
+# page" is often not the reel on screen. The current reel is the one whose
+# action bar sits closest to the middle of the window; its block is stamped
+# `data-rc-reel` so every later step (like, comment, follow) acts on the same
+# reel even if Instagram re-renders around it.
+_REEL_CURRENT_JS = """() => {
+  document.querySelectorAll('[data-rc-reel]').forEach(e => e.removeAttribute('data-rc-reel'));
+  const vh = window.innerHeight, mid = vh / 2;
+  let best = null, dist = 1e9;
+  for (const svg of document.querySelectorAll('svg[aria-label="Like"], svg[aria-label="Unlike"]')) {
+    const r = svg.getBoundingClientRect();
+    if (!r.width || r.bottom < 0 || r.top > vh) continue;
+    const d = Math.abs((r.top + r.bottom) / 2 - mid);
+    if (d < dist) { dist = d; best = svg; }
+  }
+  if (!best) return null;
+  // Up to the block that holds this reel: the nearest ancestor with a video
+  // and the Comment control in it.
+  let box = best.parentElement;
+  while (box && !(box.querySelector('video') && box.querySelector('svg[aria-label="Comment"]'))) {
+    box = box.parentElement;
+  }
+  box = box || best.closest('article, section, main') || document.body;
+  box.setAttribute('data-rc-reel', '1');
+  let author = null;
+  for (const a of box.querySelectorAll('a[href]')) {
+    const p = (a.getAttribute('href') || '').split('?')[0].split('/').filter(Boolean);
+    if (p.length === 1 && /^[A-Za-z0-9._]{1,30}$/.test(p[0])
+        && !['explore', 'reels', 'stories', 'p', 'reel', 'direct', 'accounts'].includes(p[0])) {
+      author = p[0]; break;
+    }
+  }
+  const words = el => (el.textContent || '').trim();
+  const fb = [...box.querySelectorAll('button, [role="button"]')]
+    .find(b => words(b) === 'Follow' && b.getBoundingClientRect().width > 0);
+  if (fb) fb.setAttribute('data-rc-follow', '1');
+  const v = box.querySelector('video');
+  return {
+    // /reels/<code>/ names the reel; on a build that keeps the address at
+    // /reels/, the author plus the video's source tells two reels apart.
+    key: location.pathname.split('/').filter(Boolean).length > 1 ? location.pathname
+         : (author || '?') + '|' + ((v && (v.currentSrc || v.src)) || '').slice(-48),
+    author,
+    liked: best.getAttribute('aria-label') === 'Unlike',
+    follow: fb ? 'follow' : ([...box.querySelectorAll('button, [role="button"]')]
+      .some(b => ['Following', 'Requested'].includes(words(b))) ? 'already' : 'none'),
+  };
+}"""
+
+REEL_WATCH_S = (3.0, 8.0)            # watching a reel before acting on it
+REEL_GAP_S = (6.0, 16.0)             # between reels
+
+
+async def _reel_click(page, svg_label: str) -> bool:
+    """Click the current reel's control drawn by `svg[aria-label=svg_label]`."""
+    loc = page.locator(f'[data-rc-reel="1"] svg[aria-label="{svg_label}"]')
+    return await _click_menu_match(loc)
+
+
+async def _next_reel(page, before: str) -> bool:
+    """On to the next reel - ArrowDown, then a wheel scroll if the address did
+    not move. True when the page is on a different reel."""
+    for attempt in range(3):
+        try:
+            if attempt == 0:
+                await page.keyboard.press("ArrowDown")
+            else:
+                h = await page.evaluate("() => window.innerHeight")
+                await page.mouse.move(400, int(h / 2))
+                await page.mouse.wheel(0, int(h * 0.9))
+        except Exception:  # noqa: BLE001
+            pass
+        for _ in range(10):
+            await page.wait_for_timeout(300)
+            if page.url.split("?")[0] != before:
+                return True
+    return False
+
+
+async def _reels_loop(page, state: dict, pool: list[str], follow: bool,
+                      visited: set[str]) -> None:
+    """Reels until Stop: watch, like, comment, follow, next."""
+    if "/reels/" not in page.url:
+        if not await _click_menu_match(page.locator('svg[aria-label="Reels"]')):
+            await page.goto(f"{HOME}reels/", wait_until="domcontentloaded")
+        await page.wait_for_timeout(3500)
+    seen: set[str] = set()
+    stuck = 0
+    while True:
+        await control.checkpoint()
+        await _dismiss_feed_overlays(page)
+        info = await page.evaluate(_REEL_CURRENT_JS)
+        key = (info or {}).get("key") or page.url.split("?")[0]
+        if not info or key in seen:
+            # Nothing readable, or still the reel already done: move on, and
+            # after a few goes reload Reels.
+            stuck += 1
+            if stuck >= 4:
+                stuck = 0
+                state["refreshes"] += 1
+                activity.log("visit", "Reels: no new reel — reopening Reels", "warn")
+                await page.goto(f"{HOME}reels/", wait_until="domcontentloaded")
+                await page.wait_for_timeout(3500)
+            else:
+                await _next_reel(page, page.url.split("?")[0])
+            continue
+        stuck = 0
+        seen.add(key)
+        state["posts"] += 1
+        state["last"] = key
+        author = info.get("author")
+
+        await control.sleep(random.uniform(*REEL_WATCH_S))     # watch it first
+        await control.checkpoint()
+
+        # like (never un-like)
+        if info.get("liked"):
+            liked = "already"
+        else:
+            liked = "liked" if await _reel_click(page, "Like") else "missing"
+            if liked == "liked":
+                state["liked"] += 1
+        activity.log("visit", f"Reels: {state['posts']} {key} @{author or '?'} — like: {liked}", "ok")
+        await control.sleep(random.uniform(1.0, 2.5))
+
+        # comment: the Comment icon opens the panel, the text is typed and posted
+        text = _pick_comment_message(pool)
+        ok = False
+        if await _reel_click(page, "Comment"):
+            await page.wait_for_timeout(1200)
+            ok = await _type_reel_comment(page, text)
+            await page.wait_for_timeout(1500)
+        if ok:
+            state["commented"] += 1
+            state["last_comment"] = text
+        else:
+            state["skipped"] += 1
+            activity.log("visit", f"Reels: couldn't comment on {key}", "warn")
+        try:
+            await page.keyboard.press("Escape")               # close the comments panel
+        except Exception:  # noqa: BLE001
+            pass
+        await page.wait_for_timeout(600)
+
+        # follow: the Follow next to the name on the reel, else on the profile
+        if follow and author and author.lower() not in visited:
+            visited.add(author.lower())
+            await control.sleep(random.uniform(1.0, 2.0))
+            result = "no-button"
+            if info.get("follow") == "already":
+                result = "already-following"
+            elif info.get("follow") == "follow":
+                try:
+                    await page.locator('[data-rc-follow="1"]').first.click(timeout=4000)
+                    result = "followed"
+                except Exception:  # noqa: BLE001
+                    result = "no-button"
+            if result == "no-button":
+                result = await _follow_on_profile(page, author)
+            if result == "followed":
+                state["followed"] += 1
+                state["last_followed"] = author
+            activity.log("visit", f"Reels: @{author} — follow: {result}",
+                         "ok" if result in ("followed", "already-following") else "warn")
+
+        await control.sleep(random.uniform(*REEL_GAP_S))
+        await control.checkpoint()
+        state["scrolls"] += 1
+        await _next_reel(page, key)
+
+
 async def comments_campaign(account_id: int | None = None,
                             messages: list[str] | None = None,
-                            follow: bool = True) -> dict:
+                            follow: bool = True,
+                            surface: str = "home") -> dict:
     """HOME → scroll → like → comment → follow, until Stop is pressed.
 
-    Walks the home feed post by post: scrolls to the next unseen post, reads it
+    `surface="reels"` does the same on the Reels page instead, one reel at a
+    time (see `_reels_loop`). Otherwise it walks the home feed post by post: scrolls to the next unseen post, reads it
     for a moment, likes it, types one random message from `messages` (the
     campaign's drafts; the built-in bank when none) and posts it, then (with
     `follow`) opens the author's profile and presses its Follow button, waits a
@@ -4844,9 +5020,16 @@ async def comments_campaign(account_id: int | None = None,
     seen: set[str] = set()
     visited: set[str] = {(_account_username(account_id) or "").lower()}   # never follow ourselves
     pool = [m for m in (messages or []) if str(m).strip()]
-    activity.log("visit", f"Comments campaign started ({len(pool) or len(REEL_COMMENTS)} message(s)) — HOME → scroll → like → comment", "ok")
+    state["surface"] = "reels" if surface == "reels" else "home"
+    activity.log("visit", f"Comments campaign started ({len(pool) or len(REEL_COMMENTS)} message(s)) — "
+                 + ("REELS → like → comment" if state["surface"] == "reels"
+                    else "HOME → scroll → like → comment")
+                 + (" → follow" if follow else ""), "ok")
 
     try:
+        if state["surface"] == "reels":
+            await _reels_loop(page, state, pool, follow, visited)
+            return dict(state)                      # the loop only ends by Stop
         await _ensure_home(page)
         await page.wait_for_timeout(2500)
         await _dismiss_feed_overlays(page)

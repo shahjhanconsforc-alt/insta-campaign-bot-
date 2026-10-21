@@ -2478,14 +2478,17 @@ $('#btn-comments-campaign')?.addEventListener('click', async () => {
   // Comments come from the saved Database drafts (the backend reads them);
   // step 3's texts are only a fallback when the store holds none.
   const messages = setupMessagePool();
+  const surface = $('#comments-surface')?.value || 'home';
+  const route = surface === 'reels' ? 'Reels → like → comment → follow, reel after reel'
+                                    : 'Home → scroll → like → comment → follow, post after post';
   if (!confirm(`Start the Comments campaign on ${ids.length} account(s)?\n\n` +
-    `Home → scroll → like → comment on post after post. Each comment is a random pick from the saved Database messages.\n` +
+    `${route}. Each comment is a random pick from the saved Database messages.\n` +
     `It keeps going until you press ⏹ Stop.`)) return;
   const started = [];
   let pool = null;
   for (const id of ids) {
     try {
-      const r = await api('/automation/comments-campaign', { method: 'POST', body: { account_id: id, messages } });
+      const r = await api('/automation/comments-campaign', { method: 'POST', body: { account_id: id, messages, surface } });
       started.push(id);
       pool = r;
     } catch (e) { toast(`${accountById(id)?.account_name || id}: ${e.message}`, true); }
@@ -2496,7 +2499,7 @@ $('#btn-comments-campaign')?.addEventListener('click', async () => {
     : pool?.source === 'panel' ? `${pool.messages} message(s) from step 3 (no Database drafts)` : 'the built-in comment bank (no messages saved)';
   toast(`💬 Comments campaign started on ${started.length} account(s) — comments from ${src}`);
   const note = $('#campaign-note');
-  if (note) { note.className = 'banner good'; note.textContent = `💬 Comments campaign running on ${started.length} account(s) — Home → scroll → like → comment. Press ⏹ Stop to end.`; }
+  if (note) { note.className = 'banner good'; note.textContent = `💬 Comments campaign running on ${started.length} account(s) — ${route}. Press ⏹ Stop to end.`; }
   clearInterval(commentsRun.timer);
   commentsRun.timer = setInterval(pollCommentsProgress, 3000);
   pollCommentsProgress();
